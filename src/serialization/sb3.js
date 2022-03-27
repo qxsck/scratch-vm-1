@@ -4,7 +4,6 @@
  * JSON and then generates all needed scratch-vm runtime structures.
  */
 
-const vmPackage = require('../../package.json');
 const Blocks = require('../engine/blocks');
 const Sprite = require('../sprites/sprite');
 const Variable = require('../engine/variable');
@@ -16,7 +15,7 @@ const uid = require('../util/uid');
 const MathUtil = require('../util/math-util');
 const StringUtil = require('../util/string-util');
 const VariableUtil = require('../util/variable-util');
-const optimize = require('./tw-optimize-sb3');
+const compress = require('./tw-compress-sb3');
 
 const {loadCostume} = require('../import/load-costume.js');
 const {loadSound} = require('../import/load-sound.js');
@@ -526,7 +525,7 @@ const serializeMonitors = function (monitors, runtime) {
  * @param {string=} targetId Optional target id if serializing only a single target
  * @return {object} Serialized runtime instance.
  */
-const serialize = function (runtime, targetId, {allowOptimization = false} = {}) {
+const serialize = function (runtime, targetId, {allowOptimization = true} = {}) {
     // Fetch targets
     const obj = Object.create(null);
     // Create extension set to hold extension ids found while serializing targets
@@ -564,20 +563,22 @@ const serialize = function (runtime, targetId, {allowOptimization = false} = {})
     // Assemble metadata
     const meta = Object.create(null);
     meta.semver = '3.0.0';
-    meta.vm = vmPackage.version;
+    // TW: There isn't a good reason to put the full version number in the json, so we don't.
+    meta.vm = '0.2.0';
     if (runtime.origin) {
         meta.origin = runtime.origin;
     }
 
     // Attach full user agent string to metadata if available
-    meta.agent = 'none';
-    if (typeof navigator !== 'undefined') meta.agent = navigator.userAgent;
+    meta.agent = '';
+    // TW: Never include full user agent to slightly improve user privacy
+    // if (typeof navigator !== 'undefined') meta.agent = navigator.userAgent;
 
     // Assemble payload and return
     obj.meta = meta;
 
     if (allowOptimization) {
-        optimize(obj);
+        compress(obj);
     }
 
     return obj;

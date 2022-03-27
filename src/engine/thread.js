@@ -198,11 +198,6 @@ class Thread {
         // these values only make sense if isCompiled == true
         this.timer = null;
         /**
-         * Warp level
-         * @type {number}
-         */
-        this.warp = 0;
-        /**
          * The thread's generator.
          * @type {Generator}
          */
@@ -399,6 +394,11 @@ class Thread {
         return null;
     }
 
+    getAllparams () {
+        const stackFrame = this.peekStackFrame();
+        return stackFrame.params;
+    }
+
     /**
      * Whether the current execution of a thread is at the top of the stack.
      * @return {boolean} True if execution is at top of the stack.
@@ -477,10 +477,10 @@ class Thread {
 
         this.procedures = {};
         for (const procedureCode of Object.keys(result.procedures)) {
-            this.procedures[procedureCode] = result.procedures[procedureCode](this.target);
+            this.procedures[procedureCode] = result.procedures[procedureCode](this);
         }
 
-        this.generator = result.startingFunction(this.target)();
+        this.generator = result.startingFunction(this)();
 
         if (!this.blockContainer.forceNoGlow) {
             this.blockGlowInFrame = this.topBlock;

@@ -84,6 +84,40 @@ const canvasPool = (function () {
     return new CanvasPool();
 }());
 
+const readImage = src => new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = function () {
+        resolve(image);
+        image.onload = null;
+        image.onerror = null;
+    };
+    image.onerror = function () {
+        reject(new Error('Costume load failed. Asset could not be read.'));
+        image.onload = null;
+        image.onerror = null;
+    };
+    image.src = src;
+});
+
+const persistentReadImage = async src => {
+    // Sometimes, when a lot of images are loaded at once, especially in Chrome, reading an image
+    // can throw an error even on valid images. To mitigate this, we'll retry image reading a few
+    // time with delays.
+    let firstError;
+    for (let i = 0; i < 3; i++) {
+        try {
+            return await readImage(src);
+        } catch (e) {
+            if (!firstError) {
+                firstError = e;
+            }
+            log.warn(e);
+            await new Promise(resolve => setTimeout(resolve, (i + Math.random()) * 5000));
+        }
+    }
+    throw firstError;
+};
+
 /**
  * Return a promise to fetch a bitmap from storage and return it as a canvas
  * If the costume has bitmapResolution 1, it will be converted to bitmapResolution 2 here (the standard for Scratch 3)
@@ -111,48 +145,37 @@ const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter) {
             return null;
         }
 
-        if (typeof createImageBitmap !== 'undefined') {
-            return createImageBitmap(
-                new Blob([asset.data], {type: asset.assetType.contentType})
-            );
-        }
-
-        return new Promise((resolve, reject) => {
-            const image = new Image();
-            image.onload = function () {
-                resolve(image);
-                image.onload = null;
-                image.onerror = null;
-            };
-            image.onerror = function () {
-                reject('Costume load failed. Asset could not be read.');
-                image.onload = null;
-                image.onerror = null;
-            };
-            image.src = asset.encodeDataURI();
-        });
+        return persistentReadImage(asset.encodeDataURI());
     }))
         .then(([baseImageElement, textImageElement]) => {
-            const mergeCanvas = canvasPool.create();
+            if (!baseImageElement) {
+                throw new Error('Loading bitmap costume base failed.');
+            }
 
             const scale = costume.bitmapResolution === 1 ? 2 : 1;
-            mergeCanvas.width = baseImageElement.width;
-            mergeCanvas.height = baseImageElement.height;
 
-            const ctx = mergeCanvas.getContext('2d');
-            ctx.drawImage(baseImageElement, 0, 0);
+            let imageOrCanvas;
+            let canvas;
             if (textImageElement) {
+                canvas = canvasPool.create();
+                canvas.width = baseImageElement.width;
+                canvas.height = baseImageElement.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(baseImageElement, 0, 0);
                 ctx.drawImage(textImageElement, 0, 0);
+                imageOrCanvas = canvas;
+            } else {
+                imageOrCanvas = baseImageElement;
             }
-            // Track the canvas we merged the bitmaps onto separately from the
-            // canvas that we receive from resize if scale is not 1. We know
-            // resize treats mergeCanvas as read only data. We don't know when
-            // resize may use or modify the canvas. So we'll only release the
-            // mergeCanvas back into the canvas pool. Reusing the canvas from
-            // resize may cause errors.
-            let canvas = mergeCanvas;
             if (scale !== 1) {
-                canvas = runtime.v2BitmapAdapter.resize(mergeCanvas, canvas.width * scale, canvas.height * scale);
+                imageOrCanvas = runtime.v2BitmapAdapter.resize(
+                    imageOrCanvas,
+                    imageOrCanvas.width * scale,
+                    imageOrCanvas.height * scale
+                );
+            }
+            if (canvas) {
+                canvasPool.release(canvas);
             }
 
             // By scaling, we've converted it to bitmap resolution 2
@@ -169,18 +192,32 @@ const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter) {
             delete costume.textLayerAsset;
 
             return {
-                canvas,
-                mergeCanvas,
+                image: imageOrCanvas,
                 rotationCenter,
                 // True if the asset matches the base layer; false if it required adjustment
                 assetMatchesBase: scale === 1 && !textImageElement
             };
         })
-        .catch(() => {
+        .catch(e => {
             // Clean up the text layer properties if it fails to load
             delete costume.textLayerMD5;
             delete costume.textLayerAsset;
+            throw e;
         });
+};
+
+const toDataURL = imageOrCanvas => {
+    if (imageOrCanvas instanceof HTMLCanvasElement) {
+        return imageOrCanvas.toDataURL();
+    }
+    const canvas = canvasPool.create();
+    canvas.width = imageOrCanvas.width;
+    canvas.height = imageOrCanvas.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(imageOrCanvas, 0, 0);
+    const url = canvas.toDataURL();
+    canvasPool.release(canvas);
+    return url;
 };
 
 const loadBitmap_ = function (costume, runtime, _rotationCenter) {
@@ -211,12 +248,12 @@ const loadBitmap_ = function (costume, runtime, _rotationCenter) {
             };
 
             if (!fetched.assetMatchesBase) {
-                updateCostumeAsset(fetched.canvas.toDataURL());
+                updateCostumeAsset(toDataURL(fetched.image));
             }
 
             return fetched;
         })
-        .then(({canvas, mergeCanvas, rotationCenter}) => {
+        .then(({image, rotationCenter}) => {
             // createBitmapSkin does the right thing if costume.rotationCenter is undefined.
             // That will be the case if you upload a bitmap asset or create one by taking a photo.
             let center;
@@ -231,8 +268,7 @@ const loadBitmap_ = function (costume, runtime, _rotationCenter) {
 
             // TODO: costume.bitmapResolution will always be 2 at this point because of fetchBitmapCanvas_, so we don't
             // need to pass it in here.
-            costume.skinId = runtime.renderer.createBitmapSkin(canvas, costume.bitmapResolution, center);
-            canvasPool.release(mergeCanvas);
+            costume.skinId = runtime.renderer.createBitmapSkin(image, costume.bitmapResolution, center);
             const renderSize = runtime.renderer.getSkinSize(costume.skinId);
             costume.size = [renderSize[0] * 2, renderSize[1] * 2]; // Actual size, since all bitmaps are resolution 2
 

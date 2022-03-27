@@ -17,7 +17,7 @@ const StageLayering = require('./stage-layering');
 const Variable = require('./variable');
 const xmlEscape = require('../util/xml-escape');
 const ScratchLinkWebSocket = require('../util/scratch-link-websocket');
-const ExtendedJSON = require('../tw-extended-json');
+const ExtendedJSON = require('../util/tw-extended-json');
 
 // Virtual I/O devices.
 const Clock = require('../io/clock');
@@ -44,6 +44,7 @@ const defaultBlockPackages = {
 };
 
 const interpolate = require('./tw-interpolate');
+const FrameLoop = require('./tw-frame-loop');
 
 const defaultExtensionColors = ['#0FBD8C', '#0DA57A', '#0B8E69'];
 
@@ -130,14 +131,15 @@ const ArgumentTypeMap = (() => {
  * and remove an existing cloud variable.
  * These are to be called whenever attempting to create or delete
  * a cloud variable.
+ * @param {Object} cloudOptions
+ * @param {number} cloudOptions.limit Maximum number of cloud variables
  * @return {CloudDataManager} The functions to be used when adding or removing a
  * cloud variable.
  */
-const cloudDataManager = () => {
-    const limit = 10;
+const cloudDataManager = cloudOptions => {
     let count = 0;
 
-    const canAddCloudVariable = () => count < limit;
+    const canAddCloudVariable = () => count < cloudOptions.limit;
 
     const addCloudVariable = () => {
         count++;
@@ -174,14 +176,6 @@ let stepThreadsProfilerId = -1;
  * @type {number}
  */
 let rendererDrawProfilerId = -1;
-
-// Use setTimeout to polyfill requestAnimationFrame in Node environments
-const _requestAnimationFrame = typeof requestAnimationFrame === 'function' ?
-    requestAnimationFrame :
-    (f => setTimeout(f, 1000 / 60));
-const _cancelAnimationFrame = typeof requestAnimationFrame === 'function' ?
-    cancelAnimationFrame :
-    clearTimeout;
 
 /**
  * Manages targets, scripts, and the sequencer.
@@ -312,11 +306,9 @@ class Runtime extends EventEmitter {
         this.turboMode = false;
 
         /**
-         * A reference to the current runtime stepping interval, set
-         * by a `setInterval`.
-         * @type {!number}
+         * tw: Responsible for managing the VM's many timers.
          */
-        this._steppingInterval = null;
+        this.frameLoop = new FrameLoop(this);
 
         /**
          * Current length of a step.
@@ -366,7 +358,11 @@ class Runtime extends EventEmitter {
          */
         this.profiler = null;
 
-        const newCloudDataManager = cloudDataManager();
+        this.cloudOptions = {
+            limit: 10
+        };
+
+        const newCloudDataManager = cloudDataManager(this.cloudOptions);
 
         /**
          * Check wether the runtime has any cloud data.
@@ -411,10 +407,6 @@ class Runtime extends EventEmitter {
 
         this._stageTarget = null;
 
-        // 60 to match default of compatibility mode off
-        // scratch-gui will set this to 30
-        this.framerate = 60;
-
         this.addonBlocks = {};
 
         this.stageWidth = Runtime.STAGE_WIDTH;
@@ -433,10 +425,10 @@ class Runtime extends EventEmitter {
 
         this.debug = false;
 
-        this._animationFrame = this._animationFrame.bind(this);
-        this._animationFrameId = null;
         this._lastStepTime = Date.now();
         this.interpolationEnabled = false;
+
+        this._defaultStoredSettings = this._generateAllProjectOptions();
     }
 
     /**
@@ -544,6 +536,14 @@ class Runtime extends EventEmitter {
      */
     static get INTERPOLATION_CHANGED () {
         return 'INTERPOLATION_CHANGED';
+    }
+
+    /**
+     * Event name for stage size changing.
+     * @const {string}
+     */
+    static get STAGE_SIZE_CHANGED () {
+        return 'STAGE_SIZE_CHANGED';
     }
 
     /**
@@ -688,7 +688,7 @@ class Runtime extends EventEmitter {
     static get PERIPHERAL_LIST_UPDATE () {
         return 'PERIPHERAL_LIST_UPDATE';
     }
-    
+
     /**
      * Event name for when the user picks a bluetooth device to connect to
      * via Companion Device Manager (CDM)
@@ -1694,6 +1694,7 @@ class Runtime extends EventEmitter {
     attachRenderer (renderer) {
         this.renderer = renderer;
         this.renderer.setLayerGroupOrdering(StageLayering.LAYER_GROUPS);
+        this.renderer.offscreenTouching = !this.runtimeOptions.fencing;
     }
 
     /**
@@ -2024,7 +2025,7 @@ class Runtime extends EventEmitter {
         this.ioDevices.cloud.clear();
 
         // Reset runtime cloud data info
-        const newCloudDataManager = cloudDataManager();
+        const newCloudDataManager = cloudDataManager(this.cloudOptions);
         this.hasCloudData = newCloudDataManager.hasCloudVariables;
         this.canAddCloudVariable = newCloudDataManager.canAddCloudVariable;
         this.addCloudVariable = this._initializeAddCloudVariable(newCloudDataManager);
@@ -2180,9 +2181,7 @@ class Runtime extends EventEmitter {
         this.threadMap.clear();
     }
 
-    _animationFrame () {
-        this._animationFrameId = _requestAnimationFrame(this._animationFrame);
-
+    _renderInterpolatedPositions () {
         const frameStarted = this._lastStepTime;
         const now = Date.now();
         const timeSinceStart = now - frameStarted;
@@ -2264,7 +2263,9 @@ class Runtime extends EventEmitter {
                 this.profiler.start(rendererDrawProfilerId);
             }
             // tw: do not draw if document is hidden or a rAF loop is running
-            if (!document.hidden && this._animationFrameId === null) {
+            // Checking for the animation frame loop is more reliable than using
+            // interpolationEnabled in some edge cases
+            if (!document.hidden && !this.frameLoop._interpolationAnimation) {
                 this.renderer.draw();
             }
             if (this.profiler !== null) {
@@ -2349,14 +2350,9 @@ class Runtime extends EventEmitter {
      */
     setFramerate (framerate) {
         // Setting framerate to anything greater than this is unnecessary and can break the sequencer
-        // Additonally, the JS spec says intervals can't run more than once every 4ms anyways
+        // Additionally, the JS spec says intervals can't run more than once every 4ms (250/s) anyways
         if (framerate > 250) framerate = 250;
-        this.framerate = framerate;
-        if (this._steppingInterval) {
-            clearInterval(this._steppingInterval);
-            this._steppingInterval = null;
-            this.start();
-        }
+        this.frameLoop.setFramerate(framerate);
         this.emit(Runtime.FRAMERATE_CHANGED, framerate);
     }
 
@@ -2366,10 +2362,7 @@ class Runtime extends EventEmitter {
      */
     setInterpolation (interpolationEnabled) {
         this.interpolationEnabled = interpolationEnabled;
-        if (this._steppingInterval) {
-            this.stop();
-            this.start();
-        }
+        this.frameLoop.setInterpolation(this.interpolationEnabled);
         this.emit(Runtime.INTERPOLATION_CHANGED, interpolationEnabled);
     }
 
@@ -2380,6 +2373,9 @@ class Runtime extends EventEmitter {
     setRuntimeOptions (runtimeOptions) {
         this.runtimeOptions = Object.assign({}, this.runtimeOptions, runtimeOptions);
         this.emit(Runtime.RUNTIME_OPTIONS_CHANGED, this.runtimeOptions);
+        if (this.renderer) {
+            this.renderer.offscreenTouching = !this.runtimeOptions.fencing;
+        }
     }
 
     /**
@@ -2390,6 +2386,50 @@ class Runtime extends EventEmitter {
         this.compilerOptions = Object.assign({}, this.compilerOptions, compilerOptions);
         this.resetAllCaches();
         this.emit(Runtime.COMPILER_OPTIONS_CHANGED, this.compilerOptions);
+    }
+
+    /**
+     * Change width and height of stage. This will also inform the renderer of the new stage size.
+     * @param {number} width New stage width
+     * @param {number} height New stage height
+     */
+    setStageSize (width, height) {
+        if (this.stageWidth !== width || this.stageHeight !== height) {
+            const deltaX = width - this.stageWidth;
+            const deltaY = height - this.stageHeight;
+            // Preserve monitor location relative to the center of the stage
+            if (this._monitorState.size > 0) {
+                const offsetX = deltaX / 2;
+                const offsetY = deltaY / 2;
+                for (const monitor of this._monitorState.valueSeq()) {
+                    const newMonitor = monitor
+                        .set('x', monitor.get('x') + offsetX)
+                        .set('y', monitor.get('y') + offsetY);
+                    this.requestUpdateMonitor(newMonitor);
+                }
+                this.emit(Runtime.MONITORS_UPDATE, this._monitorState);
+            }
+
+            this.stageWidth = width;
+            this.stageHeight = height;
+            if (this.renderer) {
+                this.renderer.setStageSize(
+                    -width / 2,
+                    width / 2,
+                    -height / 2,
+                    height / 2
+                );
+            }
+        }
+        this.emit(Runtime.STAGE_SIZE_CHANGED, width, height);
+    }
+
+    setInEditor (inEditor) {
+        // no-op
+    }
+
+    convertToPackagedRuntime () {
+        // no-op
     }
 
     /**
@@ -2437,7 +2477,7 @@ class Runtime extends EventEmitter {
                 customFieldTypes: {},
                 menus: []
             };
-            this._blockInfo.splice(1, 0, blockInfo);
+            this._blockInfo.unshift(blockInfo);
         }
         blockInfo.blocks.push({
             info: {},
@@ -2508,29 +2548,56 @@ class Runtime extends EventEmitter {
         if (parsed.hq && this.renderer) {
             this.renderer.setUseHighQualityRender(true);
         }
+        const storedWidth = +parsed.width || this.stageWidth;
+        const storedHeight = +parsed.height || this.stageHeight;
+        if (storedWidth !== this.stageWidth || storedHeight !== this.stageHeight) {
+            this.setStageSize(storedWidth, storedHeight);
+        }
     }
 
-    generateProjectOptions () {
-        const options = {};
-        options.framerate = this.framerate;
-        options.runtimeOptions = this.runtimeOptions;
-        options.interpolation = this.interpolationEnabled;
-        options.turbo = this.turboMode;
-        options.hq = this.renderer ? this.renderer.useHighQualityRender : false;
-        return options;
+    _generateAllProjectOptions () {
+        return {
+            framerate: this.frameLoop.framerate,
+            runtimeOptions: this.runtimeOptions,
+            interpolation: this.interpolationEnabled,
+            turbo: this.turboMode,
+            hq: this.renderer ? this.renderer.useHighQualityRender : false,
+            width: this.stageWidth,
+            height: this.stageHeight
+        };
+    }
+
+    generateDifferingProjectOptions () {
+        const difference = (oldObject, newObject) => {
+            const result = {};
+            for (const key of Object.keys(newObject)) {
+                const newValue = newObject[key];
+                const oldValue = oldObject[key];
+                if (typeof newValue === 'object' && newValue) {
+                    const valueDiffering = difference(oldValue, newValue);
+                    if (Object.keys(valueDiffering).length > 0) {
+                        result[key] = valueDiffering;
+                    }
+                } else if (newValue !== oldValue) {
+                    result[key] = newValue;
+                }
+            }
+            return result;
+        };
+        return difference(this._defaultStoredSettings, this._generateAllProjectOptions());
     }
 
     storeProjectOptions () {
-        const options = this.generateProjectOptions();
+        const options = this.generateDifferingProjectOptions();
         // TODO: translate
-        const text = `Configuration for https://turbowarp.org/\nDo not edit by hand\n${ExtendedJSON.stringify(options)}${COMMENT_CONFIG_MAGIC}`;
+        const text = `Configuration for https://turbowarp.org/\nYou can move, resize, and minimize this comment, but don't edit it by hand. This comment can be deleted to remove the stored settings.\n${ExtendedJSON.stringify(options)}${COMMENT_CONFIG_MAGIC}`;
         const existingComment = this.findProjectOptionsComment();
         if (existingComment) {
             existingComment.text = text;
         } else {
             const target = this.getTargetForStage();
             // TODO: smarter position logic
-            target.createComment(uid(), null, text, 50, 50, 350, 150, false);
+            target.createComment(uid(), null, text, 50, 50, 350, 170, false);
         }
         this.emitProjectChanged();
     }
@@ -2979,17 +3046,8 @@ class Runtime extends EventEmitter {
      */
     start () {
         // Do not start if we are already running
-        if (this._steppingInterval) return;
-
-        if (this.interpolationEnabled) {
-            this._animationFrameId = _requestAnimationFrame(this._animationFrame);
-        }
-
-        const interval = 1000 / this.framerate;
-        this.currentStepTime = interval;
-        this._steppingInterval = setInterval(() => {
-            this._step();
-        }, interval);
+        if (this.frameLoop.running) return;
+        this.frameLoop.start();
         this.emit(Runtime.RUNTIME_STARTED);
     }
 
@@ -2998,18 +3056,10 @@ class Runtime extends EventEmitter {
      * Note: This only stops the loop. It will not stop any threads the next time the VM starts
      */
     stop () {
-        if (!this._steppingInterval) {
+        if (!this.frameLoop.running) {
             return;
         }
-        clearInterval(this._steppingInterval);
-        this._steppingInterval = null;
-
-        // tw: also cancel the animation frame loop
-        if (this._animationFrameId !== null) {
-            _cancelAnimationFrame(this._animationFrameId);
-            this._animationFrameId = null;
-        }
-
+        this.frameLoop.stop();
         this.emit(Runtime.RUNTIME_STOPPED);
     }
 

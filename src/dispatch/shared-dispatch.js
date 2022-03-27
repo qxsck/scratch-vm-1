@@ -172,7 +172,7 @@ class SharedDispatch {
                 resolve(message.result);
             }
         } catch (e) {
-            log.error(`Dispatch callback failed: ${JSON.stringify(e)}`);
+            log.error(`Dispatch callback failed: ${e}`);
         }
     }
 
@@ -204,7 +204,7 @@ class SharedDispatch {
             } else {
                 promise.then(
                     result => worker.postMessage({responseId: message.responseId, result}),
-                    error => worker.postMessage({responseId: message.responseId, error})
+                    error => worker.postMessage({responseId: message.responseId, error: `${error}`})
                 );
             }
         }

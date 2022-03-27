@@ -1,9 +1,13 @@
 const MathUtil = require('../util/math-util');
 
+const roundToThreeDecimals = number => Math.round(number * 1000) / 1000;
+
 class Mouse {
     constructor (runtime) {
-        this._x = 0;
-        this._y = 0;
+        this._clientX = 0;
+        this._clientY = 0;
+        this._scratchX = 0;
+        this._scratchY = 0;
         this._buttons = new Set();
         this.usesRightClickDown = false;
         this._isDown = false;
@@ -64,19 +68,19 @@ class Mouse {
     postData (data) {
         if (data.x) {
             this._clientX = data.x;
-            this._scratchX = Math.round(MathUtil.clamp(
+            this._scratchX = MathUtil.clamp(
                 this.runtime.stageWidth * ((data.x / data.canvasWidth) - 0.5),
                 -(this.runtime.stageWidth / 2),
                 (this.runtime.stageWidth / 2)
-            ));
+            );
         }
         if (data.y) {
             this._clientY = data.y;
-            this._scratchY = Math.round(MathUtil.clamp(
+            this._scratchY = MathUtil.clamp(
                 -this.runtime.stageHeight * ((data.y / data.canvasHeight) - 0.5),
                 -(this.runtime.stageHeight / 2),
                 (this.runtime.stageHeight / 2)
-            ));
+            );
         }
         if (typeof data.isDown !== 'undefined') {
             // If no button specified, default to left button for compatibility
@@ -145,7 +149,10 @@ class Mouse {
      */
     getScratchX () {
         if (!this._useMovement) return '-0';
-        return this._scratchX;
+        if (this.runtime.runtimeOptions.miscLimits) {
+            return Math.round(this._scratchX);
+        }
+        return roundToThreeDecimals(this._scratchX);
     }
 
     /**
@@ -154,7 +161,10 @@ class Mouse {
      */
     getScratchY () {
         if (!this._useMovement) return '-0';
-        return this._scratchY;
+        if (this.runtime.runtimeOptions.miscLimits) {
+            return Math.round(this._scratchY);
+        }
+        return roundToThreeDecimals(this._scratchY);
     }
 
     /**

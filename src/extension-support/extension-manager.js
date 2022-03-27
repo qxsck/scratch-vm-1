@@ -60,6 +60,15 @@ const builtinExtensions = {
  * @property {Function} reject - function to call on failed worker startup
  */
 
+const createExtensionService = extensionManager => {
+    const service = {};
+    service.registerExtensionServiceSync = extensionManager.registerExtensionServiceSync.bind(extensionManager);
+    service.allocateWorker = extensionManager.allocateWorker.bind(extensionManager);
+    service.onWorkerInit = extensionManager.onWorkerInit.bind(extensionManager);
+    service.registerExtensionService = extensionManager.registerExtensionService.bind(extensionManager);
+    return service;
+};
+
 class ExtensionManager {
     constructor (runtime) {
         /**
@@ -90,6 +99,14 @@ class ExtensionManager {
         this._loadedExtensions = new Map();
 
         /**
+         * Controls how remote custom extensions are loaded.
+         * One of the strings:
+         *  - "worker" (default)
+         *  - "iframe"
+         */
+        this.workerMode = 'worker';
+
+        /**
          * Keep a reference to the runtime so we can construct internal extension objects.
          * TODO: remove this in favor of extensions accessing the runtime as a service.
          * @type {Runtime}
@@ -99,7 +116,7 @@ class ExtensionManager {
         this.loadingAsyncExtensions = 0;
         this.asyncExtensionsLoadedCallbacks = [];
 
-        dispatch.setService('extensions', this).catch(e => {
+        dispatch.setService('extensions', createExtensionService(this)).catch(e => {
             log.error(`ExtensionManager was unable to register extension service: ${JSON.stringify(e)}`);
         });
     }
@@ -165,20 +182,11 @@ class ExtensionManager {
         this.loadingAsyncExtensions++;
 
         return new Promise((resolve, reject) => {
-            // If we `require` this at the global level it breaks non-webpack targets, including tests
-            // eslint-disable-next-line max-len
-            const ExtensionWorker = require('worker-loader?name=js/extension-worker/extension-worker.[hash].js!./extension-worker');
-
             this.pendingExtensions.push({extensionURL, resolve, reject});
-            dispatch.addWorker(new ExtensionWorker());
-        })
-            .then(() => {
-                this.loadingAsyncExtensions--;
-                if (this.loadingAsyncExtensions === 0) {
-                    this.asyncExtensionsLoadedCallbacks.forEach(i => i());
-                    this.asyncExtensionsLoadedCallbacks = [];
-                }
-            });
+            this.createExtensionWorker()
+                .then(worker => dispatch.addWorker(worker))
+                .catch(error => reject(error));
+        });
     }
 
     /**
@@ -192,6 +200,22 @@ class ExtensionManager {
         return new Promise(resolve => {
             this.asyncExtensionsLoadedCallbacks.push(resolve);
         });
+    }
+
+    /**
+     * Creates a new extension worker.
+     * @returns {Promise}
+     */
+    createExtensionWorker () {
+        if (this.workerMode === 'worker') {
+            // eslint-disable-next-line max-len
+            const ExtensionWorker = require('worker-loader?name=js/extension-worker/extension-worker.[hash].js!./extension-worker');
+            return Promise.resolve(new ExtensionWorker());
+        } else if (this.workerMode === 'iframe') {
+            return import(/* webpackChunkName: "iframe-extension-worker" */ './tw-iframe-extension-worker')
+                .then(mod => new mod.default());
+        }
+        return Promise.reject(new Error('Unknown extension worker mode'));
     }
 
     /**
@@ -236,6 +260,12 @@ class ExtensionManager {
         dispatch.call(serviceName, 'getInfo').then(info => {
             this._loadedExtensions.set(info.id, serviceName);
             this._registerExtensionInfo(serviceName, info);
+
+            this.loadingAsyncExtensions--;
+            if (this.loadingAsyncExtensions === 0) {
+                this.asyncExtensionsLoadedCallbacks.forEach(i => i());
+                this.asyncExtensionsLoadedCallbacks = [];
+            }
         });
     }
 

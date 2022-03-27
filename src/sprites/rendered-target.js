@@ -162,6 +162,11 @@ class RenderedTarget extends Target {
          */
         this.textToSpeechLanguage = null;
 
+        // Node-style event emitters have non-zero performance overhead compared to function calls, so we
+        // replace some very high frequency events with these specific methods that are overridden elsewhere.
+        this.onTargetMoved = null;
+        this.onTargetVisualChange = null;
+
         this.interpolationData = null;
     }
 
@@ -208,22 +213,6 @@ class RenderedTarget extends Target {
     }
 
     /**
-     * Event which fires when a target moves.
-     * @type {string}
-     */
-    static get EVENT_TARGET_MOVED () {
-        return 'TARGET_MOVED';
-    }
-
-    /**
-     * Event which fires when a target changes visually, for updating say bubbles.
-     * @type {string}
-     */
-    static get EVENT_TARGET_VISUAL_CHANGE () {
-        return 'EVENT_TARGET_VISUAL_CHANGE';
-    }
-
-    /**
      * Rotation style for "all around"/spinning.
      * @type {string}
      */
@@ -259,6 +248,12 @@ class RenderedTarget extends Target {
         };
     }
 
+    emitVisualChange () {
+        if (this.onTargetVisualChange) {
+            this.onTargetVisualChange(this);
+        }
+    }
+
     /**
      * Set the X and Y coordinates.
      * @param {!number} x New X coordinate, in Scratch coordinates.
@@ -279,14 +274,16 @@ class RenderedTarget extends Target {
 
             this.renderer.updateDrawablePosition(this.drawableID, position);
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         } else {
             this.x = x;
             this.y = y;
         }
-        this.emitFast(RenderedTarget.EVENT_TARGET_MOVED, this, oldX, oldY, force);
+        if (this.onTargetMoved) {
+            this.onTargetMoved(this, oldX, oldY, force);
+        }
         this.runtime.requestTargetsUpdate(this);
     }
 
@@ -327,7 +324,7 @@ class RenderedTarget extends Target {
             const {direction: renderedDirection, scale} = this._getRenderedDirectionAndScale();
             this.renderer.updateDrawableDirectionScale(this.drawableID, renderedDirection, scale);
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         }
@@ -356,7 +353,7 @@ class RenderedTarget extends Target {
         if (this.renderer) {
             this.renderer.updateDrawableVisible(this.drawableID, this.visible);
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         }
@@ -387,7 +384,7 @@ class RenderedTarget extends Target {
             const {direction, scale} = this._getRenderedDirectionAndScale();
             this.renderer.updateDrawableDirectionScale(this.drawableID, direction, scale);
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         } else {
@@ -409,7 +406,7 @@ class RenderedTarget extends Target {
         if (this.renderer) {
             this.renderer.updateDrawableEffect(this.drawableID, effectName, value);
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         }
@@ -429,7 +426,7 @@ class RenderedTarget extends Target {
                 this.renderer.updateDrawableEffect(this.drawableID, effectName, 0);
             }
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         }
@@ -450,11 +447,11 @@ class RenderedTarget extends Target {
             index, 0, this.sprite.costumes.length - 1
         );
         if (this.renderer) {
-            const costume = this.getCostumes()[this.currentCostume];
+            const costume = this.sprite.costumes[this.currentCostume];
             this.renderer.updateDrawableSkinId(this.drawableID, costume.skinId);
 
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         }
@@ -592,7 +589,7 @@ class RenderedTarget extends Target {
             const {direction, scale} = this._getRenderedDirectionAndScale();
             this.renderer.updateDrawableDirectionScale(this.drawableID, direction, scale);
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         }
@@ -699,7 +696,7 @@ class RenderedTarget extends Target {
             }
 
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         }
@@ -1108,7 +1105,9 @@ class RenderedTarget extends Target {
      * Dispose, destroying any run-time properties.
      */
     dispose () {
-        this.runtime.changeCloneCounter(-1);
+        if (!this.isOriginal) {
+            this.runtime.changeCloneCounter(-1);
+        }
         this.runtime.stopForTarget(this);
         this.runtime.removeExecutable(this);
         this.sprite.removeClone(this);
@@ -1117,7 +1116,7 @@ class RenderedTarget extends Target {
                 StageLayering.BACKGROUND_LAYER :
                 StageLayering.SPRITE_LAYER);
             if (this.visible) {
-                this.emitFast(RenderedTarget.EVENT_TARGET_VISUAL_CHANGE, this);
+                this.emitVisualChange();
                 this.runtime.requestRedraw();
             }
         }

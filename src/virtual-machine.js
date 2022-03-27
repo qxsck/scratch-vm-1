@@ -19,7 +19,7 @@ const formatMessage = require('format-message');
 
 const Variable = require('./engine/variable');
 const newBlockIds = require('./util/new-block-ids');
-const ExtendedJSON = require('./tw-extended-json');
+const ExtendedJSON = require('./util/tw-extended-json');
 
 const {loadCostume} = require('./import/load-costume.js');
 const {loadSound} = require('./import/load-sound.js');
@@ -45,6 +45,13 @@ formatMessage.setup({
     missingTranslation: 'ignore'
 });
 
+const createRuntimeService = runtime => {
+    const service = {};
+    service._refreshExtensionPrimitives = runtime._refreshExtensionPrimitives.bind(runtime);
+    service._registerExtensionPrimitives = runtime._registerExtensionPrimitives.bind(runtime);
+    return service;
+};
+
 /**
  * Handles connections between blocks, stage, and extensions.
  * @constructor
@@ -58,7 +65,7 @@ class VirtualMachine extends EventEmitter {
          * @type {!Runtime}
          */
         this.runtime = new Runtime();
-        centralDispatch.setService('runtime', this.runtime).catch(e => {
+        centralDispatch.setService('runtime', createRuntimeService(this.runtime)).catch(e => {
             log.error(`Failed to register runtime service: ${JSON.stringify(e)}`);
         });
 
@@ -175,6 +182,9 @@ class VirtualMachine extends EventEmitter {
         this.runtime.on(Runtime.INTERPOLATION_CHANGED, framerate => {
             this.emit(Runtime.INTERPOLATION_CHANGED, framerate);
         });
+        this.runtime.on(Runtime.STAGE_SIZE_CHANGED, (width, height) => {
+            this.emit(Runtime.STAGE_SIZE_CHANGED, width, height);
+        });
         this.runtime.on(Runtime.COMPILE_ERROR, (target, error) => {
             this.emit(Runtime.COMPILE_ERROR, target, error);
         });
@@ -253,8 +263,24 @@ class VirtualMachine extends EventEmitter {
         this.runtime.setCompilerOptions(compilerOptions);
     }
 
+    setStageSize (width, height) {
+        this.runtime.setStageSize(width, height);
+    }
+
+    setInEditor (inEditor) {
+        this.runtime.setInEditor(inEditor);
+    }
+
+    convertToPackagedRuntime () {
+        this.runtime.convertToPackagedRuntime();
+    }
+
     addAddonBlock (options) {
         this.runtime.addAddonBlock(options);
+    }
+
+    getAddonBlock (procedureCode) {
+        return this.runtime.getAddonBlock(procedureCode);
     }
 
     storeProjectOptions () {
@@ -266,6 +292,7 @@ class VirtualMachine extends EventEmitter {
 
     enableDebug () {
         this.runtime.enableDebug();
+        return 'enabled debug mode';
     }
 
     /**
@@ -404,7 +431,10 @@ class VirtualMachine extends EventEmitter {
                     json.projectVersion = 2;
                     return Promise.resolve([json, sb1.zip]);
                 } catch (sb1Error) {
-                    if (sb1Error instanceof ValidationError) {
+                    if (
+                        sb1Error instanceof ValidationError ||
+                        `${sb1Error}`.includes('Non-ascii character in FixedAsciiString')
+                    ) {
                         // The input does not validate as a Scratch 1 file.
                     } else {
                         // The project appears to be a Scratch 1 file but it
@@ -575,6 +605,9 @@ class VirtualMachine extends EventEmitter {
         // Clear the current runtime
         this.clear();
 
+        if (typeof performance !== 'undefined') {
+            performance.mark('scratch-vm-deserialize-start');
+        }
         const runtime = this.runtime;
         const deserializePromise = function () {
             const projectVersion = projectJSON.projectVersion;
@@ -589,8 +622,14 @@ class VirtualMachine extends EventEmitter {
             return Promise.reject('Unable to verify Scratch Project version.');
         };
         return deserializePromise()
-            .then(({targets, extensions}) =>
-                this.installTargets(targets, extensions, true));
+            .then(({targets, extensions}) => {
+                if (typeof performance !== 'undefined') {
+                    performance.mark('scratch-vm-deserialize-end');
+                    performance.measure('scratch-vm-deserialize',
+                        'scratch-vm-deserialize-start', 'scratch-vm-deserialize-end');
+                }
+                return this.installTargets(targets, extensions, true);
+            });
     }
 
     /**

@@ -181,8 +181,8 @@ class Mouse {
         }
         this._clientX = this._movementX;
         this._clientY = this._movementY;
-        this._scratchX = Math.round(MathUtil.clamp(this._movementX, -this.runtime.stageWidth / 2, this.runtime.stageWidth / 2));
-        this._scratchY = Math.round(MathUtil.clamp(this._movementY, -this.runtime.stageHeight / 2, this.runtime.stageHeight / 2));
+        this._scratchX = MathUtil.clamp(this._movementX, -this.runtime.stageWidth / 2, this.runtime.stageWidth / 2);
+        this._scratchY = MathUtil.clamp(this._movementY, -this.runtime.stageHeight / 2, this.runtime.stageHeight / 2);
         this._movementX = 0;
         this._movementY = 0;
     }

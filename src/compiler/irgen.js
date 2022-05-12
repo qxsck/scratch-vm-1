@@ -1,19 +1,3 @@
-/**
- * Copyright (C) 2021 Thomas Weber
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License version 3
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
 const Cast = require('../util/cast');
 const StringUtil = require('../util/string-util');
 const BlockType = require('../extension-support/block-type');
@@ -1155,9 +1139,13 @@ class ScriptTreeGenerator {
                 };
             }
 
-            // These are guaranteed to exist by previous checks
             const definitionId = this.blocks.getProcedureDefinition(procedureCode);
             const definitionBlock = this.blocks.getBlock(definitionId);
+            if (!definitionBlock) {
+                return {
+                    kind: 'noop'
+                };
+            }
             const innerDefinition = this.blocks.getBlock(definitionBlock.inputs.custom_block.block);
 
             let isWarp = this.script.isWarp;

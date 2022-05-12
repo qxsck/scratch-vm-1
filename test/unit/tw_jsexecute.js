@@ -40,7 +40,11 @@ test('comparisons', t => {
         '0.23',
         '.23',
         '-.23',
-        '0.0'
+        '0.0',
+        NaN,
+        'NaN',
+        Infinity,
+        'Infinity'
     ];
     const compareEqual = evaluateRuntimeFunction('compareEqual');
     const compareGreaterThan = evaluateRuntimeFunction('compareGreaterThan');
@@ -48,9 +52,15 @@ test('comparisons', t => {
     for (const a of VALUES) {
         for (const b of VALUES) {
             const cast = Cast.compare(a, b);
-            t.equal(compareEqual(a, b), cast === 0, `${a} === ${b}`);
-            t.equal(compareGreaterThan(a, b), cast > 0, `${a} > ${b}`);
-            t.equal(compareLessThan(a, b), cast < 0, `${a} < ${b}`);
+            if (compareEqual(a, b) !== (cast === 0)) {
+                t.fail(`${a} should be === ${b}`);
+            }
+            if (compareGreaterThan(a, b) !== (cast > 0)) {
+                t.fail(`${a} should be > ${b}`);
+            }
+            if (compareLessThan(a, b) !== (cast < 0)) {
+                t.fail(`${a} should be < ${b}`);
+            }
         }
     }
     t.end();

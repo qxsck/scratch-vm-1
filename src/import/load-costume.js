@@ -1,10 +1,23 @@
 const StringUtil = require('../util/string-util');
 const log = require('../util/log');
+const AsyncLimiter = require('../util/async-limiter');
 const {loadSvgString, serializeSvgToString} = require('scratch-svg-renderer');
+const {parseVectorMetadata} = require('../serialization/tw-costume-import-export');
 
 const loadVector_ = function (costume, runtime, rotationCenter, optVersion) {
     return new Promise(resolve => {
         let svgString = costume.asset.decodeText();
+
+        // TW: We allow SVGs to specify their rotation center using a special comment.
+        if (typeof rotationCenter === 'undefined') {
+            const parsedRotationCenter = parseVectorMetadata(svgString);
+            if (parsedRotationCenter) {
+                rotationCenter = parsedRotationCenter;
+                costume.rotationCenterX = rotationCenter[0];
+                costume.rotationCenterY = rotationCenter[1];
+            }
+        }
+    
         // SVG Renderer load fixes "quirks" associated with Scratch 2 projects
         if (optVersion && optVersion === 2) {
             // scratch-svg-renderer fixes syntax that causes loading issues,
@@ -31,6 +44,10 @@ const loadVector_ = function (costume, runtime, rotationCenter, optVersion) {
             costume.rotationCenterX = rotationCenter[0];
             costume.rotationCenterY = rotationCenter[1];
             costume.bitmapResolution = 1;
+        }
+
+        if (runtime.isPackaged) {
+            costume.asset = null;
         }
 
         resolve(costume);
@@ -84,7 +101,11 @@ const canvasPool = (function () {
     return new CanvasPool();
 }());
 
-const readImage = src => new Promise((resolve, reject) => {
+/**
+ * @param {string} src URL of image
+ * @returns {Promise<HTMLImageElement>}
+ */
+const readAsImageElement = src => new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = function () {
         resolve(image);
@@ -99,24 +120,44 @@ const readImage = src => new Promise((resolve, reject) => {
     image.src = src;
 });
 
-const persistentReadImage = async src => {
+/**
+ * @param {Asset} asset scratch-storage asset
+ * @returns {Promise<HTMLImageElement|ImageBitmap>}
+ */
+const _persistentReadImage = async asset => {
     // Sometimes, when a lot of images are loaded at once, especially in Chrome, reading an image
     // can throw an error even on valid images. To mitigate this, we'll retry image reading a few
     // time with delays.
     let firstError;
     for (let i = 0; i < 3; i++) {
         try {
-            return await readImage(src);
+            if (typeof createImageBitmap === 'function') {
+                const imageBitmap = await createImageBitmap(
+                    new Blob([asset.data.buffer], {type: asset.assetType.contentType})
+                );
+                // If we do too many createImageBitmap at the same time, some browsers (Chrome) will
+                // sometimes resolve with undefined. We limit concurrency so this shouldn't ever
+                // happen, but if it somehow does, throw an error so it can be retried or so that it
+                // falls back to scratch's broken costume handling.
+                if (!imageBitmap) {
+                    throw new Error(`createImageBitmap resolved with ${imageBitmap}`);
+                }
+                return imageBitmap;
+            }
+            return await readAsImageElement(asset.encodeDataURI());
         } catch (e) {
             if (!firstError) {
                 firstError = e;
             }
             log.warn(e);
-            await new Promise(resolve => setTimeout(resolve, (i + Math.random()) * 5000));
+            await new Promise(resolve => setTimeout(resolve, Math.random() * 2000));
         }
     }
     throw firstError;
 };
+
+// Browsers break when we do too many createImageBitmap at the same time.
+const readImage = new AsyncLimiter(_persistentReadImage, 25);
 
 /**
  * Return a promise to fetch a bitmap from storage and return it as a canvas
@@ -133,7 +174,7 @@ const persistentReadImage = async src => {
  *     assetMatchesBase is true if the asset matches the base layer; false if it required adjustment
  */
 const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter) {
-    if (!costume || !costume.asset) {
+    if (!costume || !costume.asset) { // TODO: We can probably remove this check...
         return Promise.reject('Costume load failed. Assets were missing.');
     }
     if (!runtime.v2BitmapAdapter) {
@@ -145,7 +186,7 @@ const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter) {
             return null;
         }
 
-        return persistentReadImage(asset.encodeDataURI());
+        return readImage.do(asset);
     }))
         .then(([baseImageElement, textImageElement]) => {
             if (!baseImageElement) {
@@ -168,15 +209,21 @@ const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter) {
                 imageOrCanvas = baseImageElement;
             }
             if (scale !== 1) {
+                // resize() returns a new canvas.
                 imageOrCanvas = runtime.v2BitmapAdapter.resize(
                     imageOrCanvas,
                     imageOrCanvas.width * scale,
                     imageOrCanvas.height * scale
                 );
+                // Old canvas is no longer used.
+                if (canvas) {
+                    canvasPool.release(canvas);
+                }
             }
-            if (canvas) {
-                canvasPool.release(canvas);
-            }
+
+            // This informs TurboWarp/scratch-render that this canvas won't be reused by the canvas pool,
+            // which helps it optimize memory use.
+            imageOrCanvas.reusable = false;
 
             // By scaling, we've converted it to bitmap resolution 2
             if (rotationCenter) {
@@ -198,11 +245,10 @@ const fetchBitmapCanvas_ = function (costume, runtime, rotationCenter) {
                 assetMatchesBase: scale === 1 && !textImageElement
             };
         })
-        .catch(e => {
+        .finally(() => {
             // Clean up the text layer properties if it fails to load
             delete costume.textLayerMD5;
             delete costume.textLayerAsset;
-            throw e;
         });
 };
 
@@ -279,8 +325,54 @@ const loadBitmap_ = function (costume, runtime, _rotationCenter) {
                 costume.rotationCenterY = rotationCenter[1] * 2;
                 costume.bitmapResolution = 2;
             }
+
+            if (runtime.isPackaged) {
+                costume.asset = null;
+            }
+
             return costume;
         });
+};
+
+// Handle all manner of costume errors with a Gray Question Mark (default costume)
+// and preserve as much of the original costume data as possible
+// Returns a promise of a costume
+const handleCostumeLoadError = function (costume, runtime) {
+    // Keep track of the old asset information until we're done loading the default costume
+    const oldAsset = costume.asset; // could be null
+    const oldAssetId = costume.assetId;
+    const oldRotationX = costume.rotationCenterX;
+    const oldRotationY = costume.rotationCenterY;
+    const oldBitmapResolution = costume.bitmapResolution;
+    const oldDataFormat = costume.dataFormat;
+
+    const AssetType = runtime.storage.AssetType;
+    const isVector = costume.dataFormat === AssetType.ImageVector.runtimeFormat;
+                
+    // Use default asset if original fails to load
+    costume.assetId = isVector ?
+        runtime.storage.defaultAssetId.ImageVector :
+        runtime.storage.defaultAssetId.ImageBitmap;
+    costume.asset = runtime.storage.get(costume.assetId);
+    costume.md5 = `${costume.assetId}.${costume.asset.dataFormat}`;
+    
+    const defaultCostumePromise = (isVector) ?
+        loadVector_(costume, runtime) : loadBitmap_(costume, runtime);
+
+    return defaultCostumePromise.then(loadedCostume => {
+        loadedCostume.broken = {};
+        loadedCostume.broken.assetId = oldAssetId;
+        loadedCostume.broken.md5 = `${oldAssetId}.${oldDataFormat}`;
+
+        // Should be null if we got here because the costume was missing
+        loadedCostume.broken.asset = oldAsset;
+        loadedCostume.broken.dataFormat = oldDataFormat;
+        
+        loadedCostume.broken.rotationCenterX = oldRotationX;
+        loadedCostume.broken.rotationCenterY = oldRotationY;
+        loadedCostume.broken.bitmapResolution = oldBitmapResolution;
+        return loadedCostume;
+    });
 };
 
 /**
@@ -301,7 +393,7 @@ const loadCostumeFromAsset = function (costume, runtime, optVersion) {
     costume.assetId = costume.asset.assetId;
     const renderer = runtime.renderer;
     if (!renderer) {
-        log.error('No rendering module present; cannot load costume: ', costume.name);
+        log.warn('No rendering module present; cannot load costume: ', costume.name);
         return Promise.resolve(costume);
     }
     const AssetType = runtime.storage.AssetType;
@@ -315,16 +407,18 @@ const loadCostumeFromAsset = function (costume, runtime, optVersion) {
     if (costume.asset.assetType.runtimeFormat === AssetType.ImageVector.runtimeFormat) {
         return loadVector_(costume, runtime, rotationCenter, optVersion)
             .catch(error => {
-                log.warn(`Error loading vector image: ${error.name}: ${error.message}`);
-                // Use default asset if original fails to load
-                costume.assetId = runtime.storage.defaultAssetId.ImageVector;
-                costume.asset = runtime.storage.get(costume.assetId);
-                costume.md5 = `${costume.assetId}.${AssetType.ImageVector.runtimeFormat}`;
-                return loadVector_(costume, runtime);
+                log.warn(`Error loading vector image: ${error}`);
+                return handleCostumeLoadError(costume, runtime);
+                
             });
     }
-    return loadBitmap_(costume, runtime, rotationCenter, optVersion);
+    return loadBitmap_(costume, runtime, rotationCenter, optVersion)
+        .catch(error => {
+            log.warn(`Error loading bitmap image: ${error}`);
+            return handleCostumeLoadError(costume, runtime);
+        });
 };
+
 
 /**
  * Load a costume's asset into memory asynchronously.
@@ -353,12 +447,12 @@ const loadCostume = function (md5ext, costume, runtime, optVersion) {
 
     // Need to load the costume from storage. The server should have a reference to this md5.
     if (!runtime.storage) {
-        log.error('No storage module present; cannot load costume asset: ', md5ext);
+        log.warn('No storage module present; cannot load costume asset: ', md5ext);
         return Promise.resolve(costume);
     }
 
     if (!runtime.storage.defaultAssetId) {
-        log.error(`No default assets found`);
+        log.warn(`No default assets found`);
         return Promise.resolve(costume);
     }
 
@@ -366,10 +460,6 @@ const loadCostume = function (md5ext, costume, runtime, optVersion) {
     const assetType = (ext === 'svg') ? AssetType.ImageVector : AssetType.ImageBitmap;
 
     const costumePromise = runtime.storage.load(assetType, md5, ext);
-    if (!costumePromise) {
-        log.error(`Couldn't fetch costume asset: ${md5ext}`);
-        return;
-    }
 
     let textLayerPromise;
     if (costume.textLayerMD5) {
@@ -378,13 +468,25 @@ const loadCostume = function (md5ext, costume, runtime, optVersion) {
         textLayerPromise = Promise.resolve(null);
     }
 
-    return Promise.all([costumePromise, textLayerPromise]).then(assetArray => {
-        costume.asset = assetArray[0];
-        if (assetArray[1]) {
-            costume.textLayerAsset = assetArray[1];
-        }
-        return loadCostumeFromAsset(costume, runtime, optVersion);
-    });
+    return Promise.all([costumePromise, textLayerPromise])
+        .then(assetArray => {
+            if (assetArray[0]) {
+                costume.asset = assetArray[0];
+            } else {
+                return handleCostumeLoadError(costume, runtime);
+            }
+
+            if (assetArray[1]) {
+                costume.textLayerAsset = assetArray[1];
+            }
+            return loadCostumeFromAsset(costume, runtime, optVersion);
+        })
+        .catch(error => {
+            // Handle case where storage.load rejects with errors
+            // instead of resolving null
+            log.warn('Error loading costume: ', error);
+            return handleCostumeLoadError(costume, runtime);
+        });
 };
 
 module.exports = {

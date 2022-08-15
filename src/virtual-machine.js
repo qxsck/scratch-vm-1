@@ -19,12 +19,13 @@ const formatMessage = require('format-message');
 
 const Variable = require('./engine/variable');
 const newBlockIds = require('./util/new-block-ids');
-const ExtendedJSON = require('./util/tw-extended-json');
 
 const {loadCostume} = require('./import/load-costume.js');
 const {loadSound} = require('./import/load-sound.js');
 const {serializeSounds, serializeCostumes} = require('./serialization/serialize-assets');
 require('canvas-toBlob');
+const {exportCostume} = require('./serialization/tw-costume-import-export');
+const Base64Util = require('./util/base64-util');
 
 const RESERVED_NAMES = ['_mouse_', '_stage_', '_edge_', '_myself_', '_random_'];
 
@@ -187,6 +188,12 @@ class VirtualMachine extends EventEmitter {
         });
         this.runtime.on(Runtime.COMPILE_ERROR, (target, error) => {
             this.emit(Runtime.COMPILE_ERROR, target, error);
+        });
+        this.runtime.on(Runtime.TURBO_MODE_OFF, () => {
+            this.emit(Runtime.TURBO_MODE_OFF);
+        });
+        this.runtime.on(Runtime.TURBO_MODE_ON, () => {
+            this.emit(Runtime.TURBO_MODE_ON);
         });
 
         this.extensionManager = new ExtensionManager(this.runtime);
@@ -405,19 +412,7 @@ class VirtualMachine extends EventEmitter {
             // input should be parsed/validated as an entire project (and not a single sprite)
             validate(input, false, (error, res) => {
                 if (error) {
-                    // tw: if parsing failed, but the result appears to be JSON,
-                    // try an alternative JSON parser that supports some non-standard literals.
-                    // This is a dirty hack to fix https://github.com/LLK/scratch-parser/issues/60
-                    if (input[0] !== '{' && input[0] !== '{'.charCodeAt(0)) {
-                        return reject(error);
-                    }
-                    if (typeof input !== 'string') input = new TextDecoder().decode(input);
-                    input = ExtendedJSON.parse(input);
-                    input = JSON.stringify(input);
-                    return validate(input, false, (error2, res2) => {
-                        if (error2) return reject(error);
-                        resolve(res2);
-                    });
+                    return reject(error);
                 }
                 resolve(res);
             });
@@ -473,7 +468,11 @@ class VirtualMachine extends EventEmitter {
         const vm = this;
         const promise = storage.load(storage.AssetType.Project, id);
         promise.then(projectAsset => {
-            vm.loadProject(projectAsset.data);
+            if (!projectAsset) {
+                log.error(`Failed to fetch project with id: ${id}`);
+                return null;
+            }
+            return vm.loadProject(projectAsset.data);
         });
     }
 
@@ -553,11 +552,9 @@ class VirtualMachine extends EventEmitter {
      * specified by optZipType or blob by default.
      */
     exportSprite (targetId, optZipType) {
-        const sb3 = require('./serialization/sb3');
-
         const soundDescs = serializeSounds(this.runtime, targetId);
         const costumeDescs = serializeCostumes(this.runtime, targetId);
-        const spriteJson = StringUtil.stringify(sb3.serialize(this.runtime, targetId));
+        const spriteJson = this.toJSON(targetId);
 
         const zip = new JSZip();
         zip.file('sprite.json', spriteJson);
@@ -574,13 +571,14 @@ class VirtualMachine extends EventEmitter {
     }
 
     /**
-     * Export project as a Scratch 3.0 JSON representation.
+     * Export project or sprite as a Scratch 3.0 JSON representation.
+     * @param {string=} optTargetId - Optional id of a sprite to serialize
      * @param {*} serializationOptions Options to pass to the serializer
      * @return {string} Serialized state of the runtime.
      */
-    toJSON (serializationOptions) {
+    toJSON (optTargetId, serializationOptions) {
         const sb3 = require('./serialization/sb3');
-        return StringUtil.stringify(sb3.serialize(this.runtime, null, serializationOptions));
+        return StringUtil.stringify(sb3.serialize(this.runtime, optTargetId, serializationOptions));
     }
 
     // TODO do we still need this function? Keeping it here so as not to introduce
@@ -888,7 +886,7 @@ class VirtualMachine extends EventEmitter {
             });
         }
         // If the target cannot be found by id, return a rejected promise
-        return new Promise.reject();
+        return Promise.reject(new Error(`No target with ID: ${optTargetId}`));
     }
 
     /**
@@ -922,6 +920,7 @@ class VirtualMachine extends EventEmitter {
      */
     updateSoundBuffer (soundIndex, newBuffer, soundEncoding) {
         const sound = this.editingTarget.sprite.sounds[soundIndex];
+        if (sound && sound.broken) delete sound.broken;
         const id = sound ? sound.soundId : null;
         if (id && this.runtime && this.runtime.audioEngine) {
             this.editingTarget.sprite.soundBank.getSoundPlayer(id).buffer = newBuffer;
@@ -996,6 +995,25 @@ class VirtualMachine extends EventEmitter {
     }
 
     /**
+     * TW: Get the raw binary data to use when exporting a costume to the user's local file system.
+     * @param {Costume} costumeObject scratch-vm costume object
+     * @returns {Uint8Array}
+     */
+    getExportedCostume (costumeObject) {
+        return exportCostume(costumeObject);
+    }
+
+    /**
+     * TW: Get a base64 string to use when exporting a costume to the user's local file system.
+     * @param {Costume} costumeObject scratch-vm costume object
+     * @returns {string} base64 string. Not a data: URI.
+     */
+    getExportedCostumeBase64 (costumeObject) {
+        const binaryData = this.getExportedCostume(costumeObject);
+        return Base64Util.uint8ArrayToBase64(binaryData);
+    }
+
+    /**
      * Update a costume with the given bitmap
      * @param {!int} costumeIndex - the index of the costume to be updated.
      * @param {!ImageData} bitmap - new bitmap for the renderer.
@@ -1005,8 +1023,18 @@ class VirtualMachine extends EventEmitter {
      *     2 for double-resolution bitmaps
      */
     updateBitmap (costumeIndex, bitmap, rotationCenterX, rotationCenterY, bitmapResolution) {
-        const costume = this.editingTarget.getCostumes()[costumeIndex];
+        return this._updateBitmap(
+            this.editingTarget.getCostumes()[costumeIndex],
+            bitmap,
+            rotationCenterX,
+            rotationCenterY,
+            bitmapResolution
+        );
+    }
+
+    _updateBitmap (costume, bitmap, rotationCenterX, rotationCenterY, bitmapResolution) {
         if (!(costume && this.runtime && this.runtime.renderer)) return;
+        if (costume && costume.broken) delete costume.broken;
 
         costume.rotationCenterX = rotationCenterX;
         costume.rotationCenterY = rotationCenterY;
@@ -1064,7 +1092,16 @@ class VirtualMachine extends EventEmitter {
      * @param {number} rotationCenterY y of point about which the costume rotates, relative to its upper left corner
      */
     updateSvg (costumeIndex, svg, rotationCenterX, rotationCenterY) {
-        const costume = this.editingTarget.getCostumes()[costumeIndex];
+        return this._updateSvg(
+            this.editingTarget.getCostumes()[costumeIndex],
+            svg,
+            rotationCenterX,
+            rotationCenterY
+        );
+    }
+
+    _updateSvg (costume, svg, rotationCenterX, rotationCenterY) {
+        if (costume && costume.broken) delete costume.broken;
         if (costume && this.runtime && this.runtime.renderer) {
             costume.rotationCenterX = rotationCenterX;
             costume.rotationCenterY = rotationCenterY;

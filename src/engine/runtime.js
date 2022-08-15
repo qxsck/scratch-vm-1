@@ -1,5 +1,6 @@
 const EventEmitter = require('events');
 const {OrderedMap} = require('immutable');
+const ExtendedJSON = require('@turbowarp/json');
 
 const ArgumentType = require('../extension-support/argument-type');
 const Blocks = require('./blocks');
@@ -17,7 +18,6 @@ const StageLayering = require('./stage-layering');
 const Variable = require('./variable');
 const xmlEscape = require('../util/xml-escape');
 const ScratchLinkWebSocket = require('../util/scratch-link-websocket');
-const ExtendedJSON = require('../util/tw-extended-json');
 
 // Virtual I/O devices.
 const Clock = require('../io/clock');
@@ -122,6 +122,8 @@ const ArgumentTypeMap = (() => {
  * removing an existing cloud variable.
  * @property {function} hasCloudVariables A function to call to check that
  * the runtime has any cloud variables.
+ * @property {function} getNumberOfCloudVariables A function that returns the
+ * number of cloud variables in the project.
  */
 
 /**
@@ -151,11 +153,14 @@ const cloudDataManager = cloudOptions => {
 
     const hasCloudVariables = () => count > 0;
 
+    const getNumberOfCloudVariables = () => count;
+
     return {
         canAddCloudVariable,
         addCloudVariable,
         removeCloudVariable,
-        hasCloudVariables
+        hasCloudVariables,
+        getNumberOfCloudVariables
     };
 };
 
@@ -316,7 +321,7 @@ class Runtime extends EventEmitter {
          * WORK_TIME.
          * @type {!number}
          */
-        this.currentStepTime = null;
+        this.currentStepTime = 1000 / 30;
 
         // Set an intial value for this.currentMSecs
         this.updateCurrentMSecs();
@@ -382,6 +387,12 @@ class Runtime extends EventEmitter {
         this.canAddCloudVariable = newCloudDataManager.canAddCloudVariable;
 
         /**
+         * A function which returns the number of cloud variables in the runtime.
+         * @returns {number}
+         */
+        this.getNumberOfCloudVariables = newCloudDataManager.getNumberOfCloudVariables;
+
+        /**
          * A function that tracks a new cloud variable in the runtime,
          * updating the cloud variable limit. Calling this function will
          * emit a cloud data update event if this is the first cloud variable
@@ -429,6 +440,19 @@ class Runtime extends EventEmitter {
         this.interpolationEnabled = false;
 
         this._defaultStoredSettings = this._generateAllProjectOptions();
+
+        /**
+         * TW: We support a "packaged runtime" mode. This can be used when:
+         *  - there will never be an editor attached such as scratch-gui or scratch-blocks
+         *  - the project will never be exported with saveProjectSb3()
+         *  - original costume and sound data is not needed
+         * In this mode, the runtime is able to discard large amounts of data and avoid some processing
+         * to make projects load faster and use less memory.
+         * This is not designed to protect projects from copying as someone can still copy the data that
+         * gets fed into the runtime in the first place.
+         * This mode is used by the TurboWarp Packager.
+         */
+        this.isPackaged = false;
     }
 
     /**
@@ -1712,6 +1736,28 @@ class Runtime extends EventEmitter {
      */
     attachStorage (storage) {
         this.storage = storage;
+
+        if (this.isPackaged) {
+            // In packaged runtime mode, generating real asset IDs is a waste of time.
+            // We do still want to preserve every asset having a unique ID.
+            const originalCreateAsset = storage.createAsset;
+            let assetIdCounter = 0;
+            // eslint-disable-next-line no-unused-vars
+            storage.createAsset = function packagedCreateAsset (assetType, dataFormat, data, assetId, generateId) {
+                if (!assetId) {
+                    assetId = (++assetIdCounter).toString();
+                }
+                return originalCreateAsset.call(
+                    this,
+                    assetType,
+                    dataFormat,
+                    data,
+                    assetId,
+                    // Never generate real asset ID
+                    false
+                );
+            };
+        }
     }
 
     // -----------------------------------------------------------------------------
@@ -2028,6 +2074,7 @@ class Runtime extends EventEmitter {
         const newCloudDataManager = cloudDataManager(this.cloudOptions);
         this.hasCloudData = newCloudDataManager.hasCloudVariables;
         this.canAddCloudVariable = newCloudDataManager.canAddCloudVariable;
+        this.getNumberOfCloudVariables = newCloudDataManager.getNumberOfCloudVariables;
         this.addCloudVariable = this._initializeAddCloudVariable(newCloudDataManager);
         this.removeCloudVariable = this._initializeRemoveCloudVariable(newCloudDataManager);
     }
@@ -2352,6 +2399,9 @@ class Runtime extends EventEmitter {
         // Setting framerate to anything greater than this is unnecessary and can break the sequencer
         // Additionally, the JS spec says intervals can't run more than once every 4ms (250/s) anyways
         if (framerate > 250) framerate = 250;
+        // Convert negative framerates to 1FPS
+        // Note that 0 is a special value which means "matching device screen refresh rate"
+        if (framerate < 0) framerate = 1;
         this.frameLoop.setFramerate(framerate);
         this.emit(Runtime.FRAMERATE_CHANGED, framerate);
     }
@@ -2394,6 +2444,8 @@ class Runtime extends EventEmitter {
      * @param {number} height New stage height
      */
     setStageSize (width, height) {
+        width = Math.round(Math.max(1, width));
+        height = Math.round(Math.max(1, height));
         if (this.stageWidth !== width || this.stageHeight !== height) {
             const deltaX = width - this.stageWidth;
             const deltaY = height - this.stageHeight;
@@ -2428,8 +2480,15 @@ class Runtime extends EventEmitter {
         // no-op
     }
 
+    /**
+     * TW: Enable "packaged runtime" mode. This is a one-way operation.
+     */
     convertToPackagedRuntime () {
-        // no-op
+        if (this.storage) {
+            throw new Error('convertToPackagedRuntime must be called before attachStorage');
+        }
+
+        this.isPackaged = true;
     }
 
     /**

@@ -345,18 +345,25 @@ const serializeBlocks = function (blocks) {
  */
 const serializeCostume = function (costume) {
     const obj = Object.create(null);
-    obj.assetId = costume.assetId;
     obj.name = costume.name;
-    obj.bitmapResolution = costume.bitmapResolution;
+
+    const costumeToSerialize = costume.broken || costume;
+
+    obj.bitmapResolution = costumeToSerialize.bitmapResolution;
+    obj.dataFormat = costumeToSerialize.dataFormat.toLowerCase();
+    
+    obj.assetId = costumeToSerialize.assetId;
+    
     // serialize this property with the name 'md5ext' because that's
     // what it's actually referring to. TODO runtime objects need to be
     // updated to actually refer to this as 'md5ext' instead of 'md5'
     // but that change should be made carefully since it is very
     // pervasive
-    obj.md5ext = costume.md5;
-    obj.dataFormat = costume.dataFormat.toLowerCase();
-    obj.rotationCenterX = costume.rotationCenterX;
-    obj.rotationCenterY = costume.rotationCenterY;
+    obj.md5ext = costumeToSerialize.md5;
+    
+    obj.rotationCenterX = costumeToSerialize.rotationCenterX;
+    obj.rotationCenterY = costumeToSerialize.rotationCenterY;
+
     return obj;
 };
 
@@ -367,19 +374,54 @@ const serializeCostume = function (costume) {
  */
 const serializeSound = function (sound) {
     const obj = Object.create(null);
-    obj.assetId = sound.assetId;
     obj.name = sound.name;
-    obj.dataFormat = sound.dataFormat.toLowerCase();
-    obj.format = sound.format;
-    obj.rate = sound.rate;
-    obj.sampleCount = sound.sampleCount;
+    
+    const soundToSerialize = sound.broken || sound;
+
+    obj.assetId = soundToSerialize.assetId;
+    obj.dataFormat = soundToSerialize.dataFormat.toLowerCase();
+    obj.format = soundToSerialize.format;
+    obj.rate = soundToSerialize.rate;
+    obj.sampleCount = soundToSerialize.sampleCount;
     // serialize this property with the name 'md5ext' because that's
     // what it's actually referring to. TODO runtime objects need to be
     // updated to actually refer to this as 'md5ext' instead of 'md5'
     // but that change should be made carefully since it is very
     // pervasive
-    obj.md5ext = sound.md5;
+    obj.md5ext = soundToSerialize.md5;
     return obj;
+};
+
+// Using some bugs, it can be possible to get values like undefined, null, or complex objects into
+// variables or lists. This will cause make the project unusable after exporting without JSON editing
+// as it will fail validation in scratch-parser.
+// To avoid this, we'll convert those objects to strings before saving them.
+const isVariableValueSafeForJSON = value => (
+    typeof value === 'number' ||
+    typeof value === 'string' ||
+    typeof value === 'boolean'
+);
+const makeSafeForJSON = value => {
+    if (Array.isArray(value)) {
+        let copy = null;
+        for (let i = 0; i < value.length; i++) {
+            if (!isVariableValueSafeForJSON(value[i])) {
+                if (!copy) {
+                    // Only copy the list when needed
+                    copy = value.slice();
+                }
+                copy[i] = `${copy[i]}`;
+            }
+        }
+        if (copy) {
+            return copy;
+        }
+        return value;
+    }
+    if (isVariableValueSafeForJSON(value)) {
+        return value;
+    }
+    return `${value}`;
 };
 
 /**
@@ -403,12 +445,12 @@ const serializeVariables = function (variables) {
             continue;
         }
         if (v.type === Variable.LIST_TYPE) {
-            obj.lists[varId] = [v.name, v.value];
+            obj.lists[varId] = [v.name, makeSafeForJSON(v.value)];
             continue;
         }
 
         // otherwise should be a scalar type
-        obj.variables[varId] = [v.name, v.value];
+        obj.variables[varId] = [v.name, makeSafeForJSON(v.value)];
         // only scalar vars have the potential to be cloud vars
         if (v.isCloud) obj.variables[varId].push(true);
     }
@@ -496,27 +538,34 @@ const serializeMonitors = function (monitors, runtime) {
     // Monitors position is always stored as position from top-left corner in 480x360 stage.
     const xOffset = (runtime.stageWidth - 480) / 2;
     const yOffset = (runtime.stageHeight - 360) / 2;
-    return monitors.valueSeq().map(monitorData => {
-        const serializedMonitor = {
-            id: monitorData.id,
-            mode: monitorData.mode,
-            opcode: monitorData.opcode,
-            params: monitorData.params,
-            spriteName: monitorData.spriteName,
-            value: Array.isArray(monitorData.value) ? [] : 0,
-            width: monitorData.width,
-            height: monitorData.height,
-            x: monitorData.x - xOffset,
-            y: monitorData.y - yOffset,
-            visible: monitorData.visible
-        };
-        if (monitorData.mode !== 'list') {
-            serializedMonitor.sliderMin = monitorData.sliderMin;
-            serializedMonitor.sliderMax = monitorData.sliderMax;
-            serializedMonitor.isDiscrete = monitorData.isDiscrete;
-        }
-        return serializedMonitor;
-    });
+    return monitors.valueSeq()
+        // TW: Old versions let people enable a monitor for "last key pressed" which Scratch won't remove
+        // automatically. As a temporary hack until upstream fixes this, we'll make sure to remove this
+        // monitor from any serialized projects so that projects won't use the TW blocks extension
+        // unnecessarily as they won't be able to load in Scratch.
+        // https://github.com/LLK/scratch-vm/issues/2331
+        .filter(monitorData => monitorData.id !== 'tw_getLastKeyPressed')
+        .map(monitorData => {
+            const serializedMonitor = {
+                id: monitorData.id,
+                mode: monitorData.mode,
+                opcode: monitorData.opcode,
+                params: monitorData.params,
+                spriteName: monitorData.spriteName,
+                value: Array.isArray(monitorData.value) ? [] : 0,
+                width: monitorData.width,
+                height: monitorData.height,
+                x: monitorData.x - xOffset,
+                y: monitorData.y - yOffset,
+                visible: monitorData.visible
+            };
+            if (monitorData.mode !== 'list') {
+                serializedMonitor.sliderMin = monitorData.sliderMin;
+                serializedMonitor.sliderMax = monitorData.sliderMax;
+                serializedMonitor.isDiscrete = monitorData.isDiscrete;
+            }
+            return serializedMonitor;
+        });
 };
 
 /**

@@ -1183,27 +1183,29 @@ const parseBlock = function (sb2block, addBroadcastMsg, getVariableId, extension
                 activeBlock.inputs[expectedArg.inputName].block = inputUid;
             }
         } else if (expectedArg.type === 'field') {
+            const stringifiedArg = `${providedArg}`;
+
             // Add as a field on this block.
             activeBlock.fields[expectedArg.fieldName] = {
                 name: expectedArg.fieldName,
-                value: providedArg
+                value: stringifiedArg
             };
 
             if (expectedArg.fieldName === 'CURRENTMENU') {
                 // In 3.0, the field value of the `sensing_current` block
                 // is in all caps.
-                activeBlock.fields[expectedArg.fieldName].value = providedArg.toUpperCase();
-                if (providedArg === 'day of week') {
+                activeBlock.fields[expectedArg.fieldName].value = stringifiedArg.toUpperCase();
+                if (stringifiedArg === 'day of week') {
                     activeBlock.fields[expectedArg.fieldName].value = 'DAYOFWEEK';
                 }
             }
 
             if (expectedArg.fieldName === 'VARIABLE') {
                 // Add `id` property to variable fields
-                activeBlock.fields[expectedArg.fieldName].id = getVariableId(providedArg, Variable.SCALAR_TYPE);
+                activeBlock.fields[expectedArg.fieldName].id = getVariableId(stringifiedArg, Variable.SCALAR_TYPE);
             } else if (expectedArg.fieldName === 'LIST') {
                 // Add `id` property to variable fields
-                activeBlock.fields[expectedArg.fieldName].id = getVariableId(providedArg, Variable.LIST_TYPE);
+                activeBlock.fields[expectedArg.fieldName].id = getVariableId(stringifiedArg, Variable.LIST_TYPE);
             } else if (expectedArg.fieldName === 'BROADCAST_OPTION') {
                 // Add the name in this field to the broadcast msg name map.
                 // Also need to provide the fields[fieldName] object,
@@ -1212,7 +1214,7 @@ const parseBlock = function (sb2block, addBroadcastMsg, getVariableId, extension
                 // replace this field's value with messageN
                 // once we can traverse through all the existing message names
                 // and come up with a fresh messageN.
-                const broadcastId = addBroadcastMsg(providedArg, activeBlock.fields[expectedArg.fieldName]);
+                const broadcastId = addBroadcastMsg(stringifiedArg, activeBlock.fields[expectedArg.fieldName]);
                 activeBlock.fields[expectedArg.fieldName].id = broadcastId;
             }
             const varType = expectedArg.variableType;

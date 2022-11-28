@@ -223,7 +223,7 @@ class ScriptTreeGenerator {
                 };
             }
             return {
-                kind: ReporterOpcode.BOOLEAN,
+                kind: ReporterOpcode.PROCEDURE_ARG_BOOLEAN,
                 index: index
             };
         }
@@ -597,7 +597,7 @@ class ScriptTreeGenerator {
             };
         case 'sensing_mousedown':
             return {
-                kind: ReporterOpcode.SENSING_MOUSE_DOWNm
+                kind: ReporterOpcode.SENSING_MOUSE_DOWN,
             };
         case 'sensing_mousex':
             return {
@@ -970,7 +970,7 @@ class ScriptTreeGenerator {
             };
         case 'looks_switchcostumeto':
             return {
-                kind: BlockOpcode.LOOKS_COSTUME_NEXT,
+                kind: BlockOpcode.LOOKS_COSTUME_SET,
                 costume: this.descendInputOfBlock(block, 'COSTUME')
             };
 

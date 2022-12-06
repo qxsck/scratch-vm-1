@@ -171,7 +171,9 @@ class ScriptTreeGenerator {
             return this.createConstantInput(0);
         }
 
-        return this.descendInput(block, preserveStrings);
+        const intermediate = this.descendInput(block, preserveStrings);
+        this.script.yields |= intermediate.yields;
+        return intermediate;
     }
 
     /**
@@ -578,21 +580,18 @@ class ScriptTreeGenerator {
                 target: this.descendInputOfBlock(block, 'CLONE_OPTION').toType(InputType.STRING)
             });
         case 'control_delete_this_clone':
-            this.script.yields = true;
-            return new IntermediateStack(StackOpcode.CONTROL_CLONE_DELETE);
+            return new IntermediateStack(StackOpcode.CONTROL_CLONE_DELETE, {}, true);
         case 'control_forever':
-            this.analyzeLoop();
             return new IntermediateStack(StackOpcode.CONTROL_WHILE, {
                 condition: this.createConstantInput(true),
                 do: this.descendSubstack(block, 'SUBSTACK')
-            });
+            }, this.analyzeLoop());
         case 'control_for_each':
-            this.analyzeLoop();
             return new IntermediateStack(StackOpcode.CONTROL_FOR, {
                 variable: this.descendVariable(block, 'VARIABLE', SCALAR_TYPE),
                 count: this.descendInputOfBlock(block, 'VALUE').toType(InputType.NUMBER),
                 do: this.descendSubstack(block, 'SUBSTACK')
-            });
+            }, this.analyzeLoop());
         case 'control_if':
             return new IntermediateStack(StackOpcode.CONTROL_IF_ELSE, {
                 condition: this.descendInputOfBlock(block, 'CONDITION').toType(InputType.BOOLEAN),
@@ -606,34 +605,28 @@ class ScriptTreeGenerator {
                 whenFalse: this.descendSubstack(block, 'SUBSTACK2')
             });
         case 'control_repeat':
-            this.analyzeLoop();
             return new IntermediateStack(StackOpcode.CONTROL_REPEAT, {
                 times: this.descendInputOfBlock(block, 'TIMES').toType(InputType.NUMBER),
                 do: this.descendSubstack(block, 'SUBSTACK')
-            });
+            }, this.analyzeLoop());
         case 'control_repeat_until': {
-            this.analyzeLoop();
             // Dirty hack: automatically enable warp timer for this block if it uses timer
             // This fixes project that do things like "repeat until timer > 0.5"
             this.usesTimer = false;
             const condition = this.descendInputOfBlock(block, 'CONDITION');
             const needsWarpTimer = this.usesTimer;
-            if (needsWarpTimer) {
-                this.script.yields = true;
-            }
             return new IntermediateStack(StackOpcode.CONTROL_WHILE, {
                 condition: new IntermediateInput(InputOpcode.OP_NOT, InputType.BOOLEAN, {
                     operand: condition
                 }),
                 do: this.descendSubstack(block, 'SUBSTACK'),
                 warpTimer: needsWarpTimer
-            });
+            }, this.analyzeLoop() || needsWarpTimer);
         }
         case 'control_stop': {
             const level = block.fields.STOP_OPTION.value;
             if (level === 'all') {
-                this.script.yields = true;
-                return new IntermediateStack(StackOpcode.CONTROL_STOP_ALL);
+                return new IntermediateStack(StackOpcode.CONTROL_STOP_ALL, {}, true);
             } else if (level === 'other scripts in sprite' || level === 'other scripts in stage') {
                 return new IntermediateStack(StackOpcode.CONTROL_STOP_OTHERS);
             } else if (level === 'this script') {
@@ -642,23 +635,20 @@ class ScriptTreeGenerator {
             return new IntermediateStack(StackOpcode.NOP);
         }
         case 'control_wait':
-            this.script.yields = true;
             return new IntermediateStack(StackOpcode.CONTROL_WAIT, {
                 seconds: this.descendInputOfBlock(block, 'DURATION').toType(InputType.NUMBER)
-            });
+            }, true);
         case 'control_wait_until':
-            this.script.yields = true;
             return new IntermediateStack(StackOpcode.CONTROL_WAIT_UNTIL, {
                 condition: this.descendInputOfBlock(block, 'CONDITION').toType(InputType.BOOLEAN)
-            });
+            }, true);
         case 'control_while':
-            this.analyzeLoop();
             return new IntermediateStack(StackOpcode.CONTROL_WHILE, {
                 condition: this.descendInputOfBlock(block, 'CONDITION').toType(InputType.BOOLEAN),
                 do: this.descendSubstack(block, 'SUBSTACK'),
                 // We should consider analyzing this like we do for control_repeat_until
                 warpTimer: false
-            });
+            }, this.analyzeLoop());
 
         case 'data_addtolist':
             return new IntermediateStack(StackOpcode.LIST_ADD, {
@@ -730,10 +720,9 @@ class ScriptTreeGenerator {
                 broadcast: this.descendInputOfBlock(block, 'BROADCAST_INPUT').toType(InputType.STRING)
             });
         case 'event_broadcastandwait':
-            this.script.yields = true;
             return new IntermediateStack(StackOpcode.EVENT_BROADCAST_AND_WAIT, {
                 broadcast: this.descendInputOfBlock(block, 'BROADCAST_INPUT').toType(InputType.STRING)
-            });
+            }, true);
 
         case 'looks_changeeffectby':
             return new IntermediateStack(StackOpcode.LOOKS_EFFECT_CHANGE, {
@@ -899,7 +888,6 @@ class ScriptTreeGenerator {
 
             const addonBlock = this.runtime.getAddonBlock(procedureCode);
             if (addonBlock) {
-                this.script.yields = true;
                 const args = {};
                 for (let i = 0; i < paramIds.length; i++) {
                     let value;
@@ -914,7 +902,7 @@ class ScriptTreeGenerator {
                     code: procedureCode,
                     arguments: args,
                     blockId: block.id
-                });
+                }, true);
             }
 
             const definitionId = this.blocks.getProcedureDefinition(procedureCode);
@@ -942,13 +930,6 @@ class ScriptTreeGenerator {
                 this.script.dependedProcedures.push(variant);
             }
 
-            // Non-warp direct recursion yields.
-            if (!this.script.isWarp) {
-                if (procedureCode === this.script.procedureCode) {
-                    this.script.yields = true;
-                }
-            }
-
             const args = [];
             for (let i = 0; i < paramIds.length; i++) {
                 let value;
@@ -964,7 +945,8 @@ class ScriptTreeGenerator {
                 code: procedureCode,
                 variant,
                 arguments: args
-            });
+            }, // Non-warp direct recursion yields.
+            !this.script.isWarp && procedureCode === this.script.procedureCode);
         }
 
         case 'sensing_resettimer':
@@ -1039,6 +1021,7 @@ class ScriptTreeGenerator {
             }
 
             const node = this.descendStackedBlock(block);
+            this.script.yields |= node.yields;
             result.push(node);
 
             blockId = block.next;
@@ -1138,7 +1121,6 @@ class ScriptTreeGenerator {
      * @returns {IntermediateInput} The parsed node.
      */
      descendCompatLayerInput (block) {
-        this.script.yields = true;
         const inputs = {};
         const fields = {};
         for (const name of Object.keys(block.inputs)) {
@@ -1151,7 +1133,7 @@ class ScriptTreeGenerator {
             opcode: block.opcode,
             inputs,
             fields
-        });
+        }, true);
     }
 
     /**
@@ -1161,7 +1143,6 @@ class ScriptTreeGenerator {
      * @returns {IntermediateStack} The parsed node.
      */
     descendCompatLayerStack (block) {
-        this.script.yields = true;
         const inputs = {};
         const fields = {};
         for (const name of Object.keys(block.inputs)) {
@@ -1174,13 +1155,11 @@ class ScriptTreeGenerator {
             opcode: block.opcode,
             inputs,
             fields
-        });
+        }, true);
     }
 
     analyzeLoop () {
-        if (!this.script.isWarp || this.script.warpTimer) {
-            this.script.yields = true;
-        }
+        return !this.script.isWarp || this.script.warpTimer;
     }
 
     readTopBlockComment (commentId) {

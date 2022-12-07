@@ -107,6 +107,9 @@ const ArgumentTypeMap = (() => {
         // They are more analagous to the label on a block.
         fieldType: 'field_image'
     };
+    map[ArgumentType.VARIABLE] = {
+        fieldType: 'field_variable'
+    };
     return map;
 })();
 
@@ -1509,6 +1512,11 @@ class Runtime extends EventEmitter {
                 valueName = placeholder;
                 shadowType = (argTypeInfo.shadow && argTypeInfo.shadow.type) || null;
                 fieldName = (argTypeInfo.shadow && argTypeInfo.shadow.fieldName) || null;
+            }
+
+            if (argInfo.type === ArgumentType.VARIABLE) {
+                argJSON.type = 'field_variable';
+                argJSON.variableTypes = [''];
             }
 
             // <value> is the ScratchBlocks name for a block input.

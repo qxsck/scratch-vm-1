@@ -41,7 +41,12 @@ const ArgumentType = {
     /**
      * Inline image on block (as part of the label)
      */
-    IMAGE: 'image'
+    IMAGE: 'image',
+
+    /**
+     * A variable or list object.
+     */
+    VARIABLE: 'variable'
 };
 
 module.exports = ArgumentType;

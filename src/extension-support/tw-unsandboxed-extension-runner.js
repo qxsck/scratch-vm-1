@@ -1,7 +1,8 @@
-const ArgumentType = require('../extension-support/argument-type');
-const BlockType = require('../extension-support/block-type');
-const TargetType = require('../extension-support/target-type');
+const ArgumentType = require('./argument-type');
+const BlockType = require('./block-type');
+const TargetType = require('./target-type');
 const AsyncLimiter = require('../util/async-limiter');
+const VariableType = require('./variable-type');
 
 /**
  * Sets up the global.Scratch API for an unsandboxed extension.
@@ -16,6 +17,7 @@ const createUnsandboxedExtensionAPI = vm => new Promise(resolve => {
     global.Scratch.ArgumentType = ArgumentType;
     global.Scratch.BlockType = BlockType;
     global.Scratch.TargetType = TargetType;
+    global.Scratch.VariableType = VariableType;
 
     const extensionObjects = [];
     const register = extensionObject => {

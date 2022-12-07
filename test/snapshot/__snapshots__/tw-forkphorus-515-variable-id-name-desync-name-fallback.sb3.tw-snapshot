@@ -9,7 +9,7 @@ const b2 = target.variables["zShM`!CD?d_|Z,]5X}N6"];
 return function* genXYZ () {
 yield* executeInCompatibilityLayer({"MESSAGE":"plan 2",}, b0, false, false, null);
 b1.value = 2;
-if (((+b1.value || 0) === 2)) {
+if ((b1.value === 2)) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass variable",}, b0, false, false, null);
 }
 b2.value = [];

@@ -12,7 +12,7 @@ b1.value = 0;
 yield* executeInCompatibilityLayer({"MESSAGE":"plan 1",}, b2, false, false, null);
 yield* thread.procedures["Wno refresh"]();
 yield* thread.procedures["Wruns below with no refresh"]();
-if (compareEqual(b1.value, 0)) {
+if ((b1.value === 0)) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass",}, b2, false, false, null);
 }
 yield* executeInCompatibilityLayer({"MESSAGE":"end",}, b2, false, false, null);

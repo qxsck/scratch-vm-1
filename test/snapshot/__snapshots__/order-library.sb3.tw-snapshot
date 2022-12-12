@@ -50,7 +50,7 @@ while (thread.timer.timeElapsed() < a0) {
 yield;
 }
 thread.timer = null;
-b0.value = (b0.value + 1);
+b0.value = ((+b0.value || 0) + 1);
 if ((b0.value === 1)) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass order is correct (1)",}, b2, false, false, null);
 } else {
@@ -74,7 +74,7 @@ while (thread.timer.timeElapsed() < a0) {
 yield;
 }
 thread.timer = null;
-b0.value = (b0.value + 1);
+b0.value = ((+b0.value || 0) + 1);
 if ((b0.value === 2)) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass order is correct (2)",}, b2, false, false, null);
 } else {

@@ -1,30 +1,36 @@
 // TW Snapshot
-// Input SHA-256: 725e0683c8cd39c78a143727bf26f8827d1e9fd627eef68a772d8a3a06806c65
+// Input SHA-256: a4ae71d2c1b70f29a667c2d582b24702068f1d128512b7aee53b2feddd274527
 
-// Sprite1 script
+// Sprite2 script
 (function factoryXYZ(thread) { const target = thread.target; const runtime = target.runtime; const stage = runtime.getTargetForStage();
 const b0 = runtime.getOpcodeFunction("looks_say");
-const b1 = stage.variables["`jEk@4|i[#Fk?(8x)AV.-my variable"];
+const b1 = stage.variables["eFlmP1{XC+I1:h0Yln.K"];
 return function* genXYZ () {
-yield* executeInCompatibilityLayer({"MESSAGE":"plan 6",}, b0, false, false, null);
-b1.value = runtime.ext_scratch3_operators._random(("an invalid number" + "."), 1);
-if (!(b1.value <= 0)) {
+yield* executeInCompatibilityLayer({"MESSAGE":"plan 7",}, b0, false, false, null);
+b1.value = [];
+listInsert(b1, "any", "a");
+listInsert(b1, "any", "b");
+listInsert(b1, "any", "c");
+if ((b1.value.length === 3)) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass",}, b0, false, false, null);
 }
-if (compareLessThan(b1.value, 1)) {
+if (listContains(b1, "a")) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass",}, b0, false, false, null);
 }
-if ((("" + b1.value).toLowerCase().indexOf(".".toLowerCase()) !== -1)) {
+if (listContains(b1, "b")) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass",}, b0, false, false, null);
 }
-b1.value = runtime.ext_scratch3_operators._random(1, ("an invalid number" + "."));
-if (!(b1.value <= 0)) {
+if (listContains(b1, "c")) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass",}, b0, false, false, null);
 }
-if (compareLessThan(b1.value, 1)) {
+if (listContains(b1, listGet(b1.value, "any"))) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass",}, b0, false, false, null);
 }
-if ((("" + b1.value).toLowerCase().indexOf(".".toLowerCase()) !== -1)) {
+listDelete(b1, "any");
+if ((b1.value.length === 2)) {
+yield* executeInCompatibilityLayer({"MESSAGE":"pass",}, b0, false, false, null);
+}
+if (compareEqual(listGet(b1.value, "*"), "")) {
 yield* executeInCompatibilityLayer({"MESSAGE":"pass",}, b0, false, false, null);
 }
 yield* executeInCompatibilityLayer({"MESSAGE":"end",}, b0, false, false, null);

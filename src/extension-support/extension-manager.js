@@ -26,7 +26,8 @@ const builtinExtensions = {
     boost: () => require('../extensions/scratch3_boost'),
     gdxfor: () => require('../extensions/scratch3_gdx_for'),
     // tw: core extension
-    tw: () => require('../extensions/tw')
+    tw: () => require('../extensions/tw'),
+    twlazy: () => require('../extensions/tw_lazy')
 };
 
 /**
@@ -128,6 +129,9 @@ class ExtensionManager {
         dispatch.setService('extensions', createExtensionService(this)).catch(e => {
             log.error(`ExtensionManager was unable to register extension service: ${JSON.stringify(e)}`);
         });
+
+        // FIXME REMOVE THIS BEFORE MERGING
+        this.loadExtensionIdSync('twlazy');
     }
 
     /**

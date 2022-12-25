@@ -522,6 +522,8 @@ const serializeTarget = function (target, extensions) {
         obj.rotationStyle = target.rotationStyle;
     }
 
+    obj.lazy = target.shouldBeLazyLoaded;
+
     // Add found extensions to the extensions object
     targetExtensions.forEach(extensionId => {
         extensions.add(extensionId);
@@ -586,7 +588,20 @@ const serialize = function (runtime, targetId, {allowOptimization = true} = {}) 
 
     const layerOrdering = getSimplifiedLayerOrdering(originalTargetsToSerialize);
 
-    const flattenedOriginalTargets = originalTargetsToSerialize.map(t => t.toJSON());
+    const flattenedOriginalTargets = originalTargetsToSerialize.map(t => {
+        const json = t.toJSON();
+        if (json.isLazyLoaded) {
+            json.costumes = t.lazyLoading.json.costumes.map(i => ({
+                ...i,
+                md5: i.md5ext
+            }));
+            json.sounds = t.lazyLoading.json.sounds.map(i => ({
+                ...i,
+                md5: i.md5ext
+            }));
+        }
+        return json;
+    });
 
     // If the renderer is attached, and we're serializing a whole project (not a sprite)
     // add a temporary layerOrder property to each target.
@@ -938,8 +953,12 @@ const parseScratchAssets = function (object, runtime, zip) {
         soundBank: runtime.audioEngine && runtime.audioEngine.createBank()
     };
 
+    const isLazy = !object.isStage && object.lazy;
+    const costumes = isLazy ? [object.costumes[0]] : object.costumes;
+    const sounds = isLazy ? [] : object.sounds;
+
     // Costumes from JSON.
-    assets.costumePromises = (object.costumes || []).map(costumeSource => {
+    assets.costumePromises = costumes.map(costumeSource => {
         // @todo: Make sure all the relevant metadata is being pulled out.
         const costume = {
             // costumeSource only has an asset if an image is being uploaded as
@@ -971,7 +990,7 @@ const parseScratchAssets = function (object, runtime, zip) {
         // process has been completed
     });
     // Sounds from JSON
-    assets.soundPromises = (object.sounds || []).map(soundSource => {
+    assets.soundPromises = sounds.map(soundSource => {
         const sound = {
             assetId: soundSource.assetId,
             format: soundSource.format,
@@ -1168,6 +1187,21 @@ const parseScratchObject = function (object, runtime, extensions, zip, assets) {
         // Make sure if soundBank is undefined, sprite.soundBank is then null.
         sprite.soundBank = soundBank || null;
     });
+
+    target.shouldBeLazyLoaded = object.lazy;
+    const isLazy = !object.isStage && target.shouldBeLazyLoaded;
+    if (isLazy) {
+        // The next time this object loads, it should not go through the lazy pipe again.
+        object.lazy = false;
+        target.lazyLoading = {
+            zip,
+            json: object,
+            promise: null
+        };
+        target.currentCostume = 0;
+        target.visible = false;
+    }
+
     return Promise.all(costumePromises.concat(soundPromises)).then(() => target);
 };
 
@@ -1388,10 +1422,29 @@ const deserialize = function (json, runtime, zip, isSingleSprite) {
         }));
 };
 
+const deserializeAssetsIntoExistingTarget = function (existingTarget, json, runtime, zip) {
+    const assets = parseScratchAssets(json, runtime, zip);
+    return Promise.all([
+        Promise.all(assets.costumePromises),
+        Promise.all(assets.soundPromises)
+    ])
+        .then(([costumePromises, soundPromises]) => {
+            existingTarget.sprite.costumes = costumePromises;
+            existingTarget.sprite.sounds = soundPromises;
+            existingTarget.sprite.soundBank = assets.soundBank;
+
+            if (json.hasOwnProperty('currentCostume')) {
+                existingTarget.setCostume(MathUtil.clamp(json.currentCostume, 0, json.costumes.length - 1));
+            }
+            existingTarget.setVisible(json.visible);
+        });
+};
+
 module.exports = {
     serialize: serialize,
     deserialize: deserialize,
     deserializeBlocks: deserializeBlocks,
     serializeBlocks: serializeBlocks,
-    getExtensionIdForOpcode: getExtensionIdForOpcode
+    getExtensionIdForOpcode: getExtensionIdForOpcode,
+    deserializeAssetsIntoExistingTarget: deserializeAssetsIntoExistingTarget
 };

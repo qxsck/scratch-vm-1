@@ -2008,6 +2008,10 @@ class Runtime extends EventEmitter {
 
         // Consider all scripts, looking for hats with opcode `requestedHatOpcode`.
         this.allScriptsByOpcodeDo(requestedHatOpcode, (script, target) => {
+            if (target.lazyLoading) {
+                return;
+            }
+
             const {
                 blockId: topBlockId,
                 fieldsOfInputs: hatFields

@@ -168,6 +168,20 @@ class RenderedTarget extends Target {
         this.onTargetVisualChange = null;
 
         this.interpolationData = null;
+
+        /**
+         * True if this target is intended to be lazy loaded. This being set to true does not necessarily
+         * mean that this target is actually lazy loaded, but rather that it should be on future reloads.
+         * @type {boolean}
+         */
+        this.shouldBeLazyLoaded = false;
+
+        /**
+         * If this target is a lazily loaded placeholder, this will contain information about how to fetch its
+         * assets as needed.
+         * @type {{zip: JSZip, json: unknown, promise: Promise<void>|null}|null}
+         */
+        this.lazyLoading = null;
     }
 
     /**
@@ -962,8 +976,8 @@ class RenderedTarget extends Target {
      * @return {RenderedTarget} New clone.
      */
     makeClone () {
-        if (!this.runtime.clonesAvailable() || this.isStage) {
-            return null; // Hit max clone limit, or this is the stage.
+        if (!this.runtime.clonesAvailable() || this.isStage || this.lazyLoading) {
+            return null; // Hit max clone limit, this is the stage, or this sprite hasn't been loaded yet.
         }
         this.runtime.changeCloneCounter(1);
         const newClone = this.sprite.createClone();
@@ -1066,6 +1080,25 @@ class RenderedTarget extends Target {
         this.dragging = false;
     }
 
+    /**
+     * Load an assets that were considered lazy.
+     * @returns {Promise<void>}
+     */
+    async unlazy () {
+        if (!this.lazyLoading) {
+            throw new Error('Target is not lazy loadable');
+        }
+        const {json, zip} = this.lazyLoading;
+        if (!this.lazyLoading.promise) {
+            const sb3 = require('../serialization/sb3');
+            this.lazyLoading.promise = sb3.deserializeAssetsIntoExistingTarget(this, json, this.runtime, zip)
+                .then(() => {
+                    this.lazyLoading = null;
+                });
+        }
+        return this.lazyLoading.promise;
+    }
+
 
     /**
      * Serialize sprite info, used when emitting events about the sprite
@@ -1096,8 +1129,9 @@ class RenderedTarget extends Target {
             tempo: this.tempo,
             volume: this.volume,
             videoTransparency: this.videoTransparency,
-            videoState: this.videoState
-
+            videoState: this.videoState,
+            isLazyLoaded: !!this.lazyLoading,
+            shouldBeLazyLoaded: this.shouldBeLazyLoaded
         };
     }
 

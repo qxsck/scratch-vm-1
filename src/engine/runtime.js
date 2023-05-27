@@ -1084,27 +1084,19 @@ class Runtime extends EventEmitter {
         }
 
         if (extensionInfo.docsURI) {
-            try {
-                const url = new URL(extensionInfo.docsURI);
-                if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-                    throw new Error('invalid protocol');
-                }
-                const xml = '<button ' +
-                    `text="${xmlEscape(maybeFormatMessage({
-                        id: 'tw.blocks.openDocs',
-                        default: 'Open Documentation',
-                        description: 'Button that opens site with more documentation about an extension'
-                    }))}" ` +
-                    'callbackKey="OPEN_DOCUMENTATION" ' +
-                    `web-class="docs-uri-${xmlEscape(extensionInfo.docsURI)}"></button>`;
-                const block = {
-                    info: {},
-                    xml
-                };
-                categoryInfo.blocks.push(block);
-            } catch (e) {
-                log.warn('cannot create docsURI button', e);
-            }
+            const xml = '<button ' +
+                `text="${xmlEscape(maybeFormatMessage({
+                    id: 'tw.blocks.openDocs',
+                    default: 'Open Documentation',
+                    description: 'Button that opens site with more documentation about an extension'
+                }))}" ` +
+                'callbackKey="OPEN_EXTENSION_DOCS" ' +
+                `callbackData="${xmlEscape(extensionInfo.docsURI)}"></button>`;
+            const block = {
+                info: {},
+                xml
+            };
+            categoryInfo.blocks.push(block);
         }
 
         for (const blockInfo of extensionInfo.blocks) {

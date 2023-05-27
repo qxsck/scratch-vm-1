@@ -197,7 +197,6 @@ test('XML escaped in Runtime.getBlocksXML()', t => {
     const button = category.children[2];
     t.equal(button.name, 'button', 'button is <button>');
     t.equal(button.attribs.text, '&apos;&quot;&gt;&lt;&amp; button text', 'escaped button text');
-    t.equal(button.attribs.callbackkey, '&apos;&quot;&gt;&lt;&amp; func', 'escaped button callback');
 
     t.end();
 });

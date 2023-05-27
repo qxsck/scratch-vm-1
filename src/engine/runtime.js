@@ -486,6 +486,12 @@ class Runtime extends EventEmitter {
          * Do not update this directly. Use Runtime.setEnforcePrivacy() instead.
          */
         this.enforcePrivacy = true;
+
+        /**
+         * Internal map of opaque identifiers to the callback to run that function.
+         * @type {Map<string, function>}
+         */
+        this.extensionButtons = new Map();
     }
 
     /**
@@ -1251,7 +1257,7 @@ class Runtime extends EventEmitter {
         }
 
         if (blockInfo.blockType === BlockType.BUTTON) {
-            return this._convertButtonForScratchBlocks(blockInfo);
+            return this._convertButtonForScratchBlocks(blockInfo, categoryInfo);
         }
 
         return this._convertBlockForScratchBlocks(blockInfo, categoryInfo);
@@ -1443,19 +1449,31 @@ class Runtime extends EventEmitter {
      * @returns {ConvertedBlockInfo} - the converted & original button information
      * @private
      */
-    _convertButtonForScratchBlocks (buttonInfo) {
-        // for now we only support these pre-defined callbacks handled in scratch-blocks
-        const supportedCallbackKeys = ['MAKE_A_LIST', 'MAKE_A_PROCEDURE', 'MAKE_A_VARIABLE'];
-        if (supportedCallbackKeys.indexOf(buttonInfo.func) < 0) {
-            log.error(`Custom button callbacks not supported yet: ${buttonInfo.func}`);
-        }
-
+    _convertButtonForScratchBlocks (buttonInfo, categoryInfo) {
         const extensionMessageContext = this.makeMessageContextForTarget();
         const buttonText = maybeFormatMessage(buttonInfo.text, extensionMessageContext);
+        const nativeCallbackKeys = ['MAKE_A_LIST', 'MAKE_A_PROCEDURE', 'MAKE_A_VARIABLE'];
+        if (nativeCallbackKeys.includes(buttonInfo.func)) {
+            return {
+                info: buttonInfo,
+                xml: `<button text="${xmlEscape(buttonText)}" callbackKey="${xmlEscape(buttonInfo.func)}"></button>`
+            };
+        }
+        // Callbacks with data will be forwarded from GUI
+        const id = `${categoryInfo.id}_${buttonInfo.func}`;
+        // callFunc is set by extension manager
+        this.extensionButtons.set(id, buttonInfo.callFunc);
         return {
             info: buttonInfo,
-            xml: `<button text="${xmlEscape(buttonText)}" callbackKey="${xmlEscape(buttonInfo.func)}"></button>`
+            xml: `<button text="${xmlEscape(buttonText)}"` +
+                ' callbackKey="EXTENSION_CALLBACK"' +
+                ` callbackData="${xmlEscape(id)}"></button>`
         };
+    }
+
+    handleExtensionButtonPress (buttonData) {
+        const callback = this.extensionButtons.get(buttonData);
+        callback();
     }
 
     /**

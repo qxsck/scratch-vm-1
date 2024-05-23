@@ -19,6 +19,7 @@ const Variable = require('../engine/variable');
 const MonitorRecord = require('../engine/monitor-record');
 const StageLayering = require('../engine/stage-layering');
 const ScratchXUtilities = require('../extension-support/tw-scratchx-utilities');
+const AssetProfilerDetails = require('./tw-asset-profiler-details');
 
 const {loadCostume} = require('../import/load-costume.js');
 const {loadSound} = require('../import/load-sound.js');
@@ -500,8 +501,9 @@ const parseScratchAssets = function (object, runtime, topLevel, zip) {
             // the file name of the costume should be the baseLayerID followed by the file ext
             const assetFileName = `${costumeSource.baseLayerID}.${ext}`;
             const textLayerFileName = costumeSource.textLayerID ? `${costumeSource.textLayerID}.png` : null;
-            costumePromises.push(runtime.wrapAssetRequest(() =>
-                deserializeCostume(costume, runtime, zip, assetFileName, textLayerFileName)
+            costumePromises.push(runtime.wrapAssetRequest(
+                AssetProfilerDetails.forCostume(object.objName, costume),
+                () => deserializeCostume(costume, runtime, zip, assetFileName, textLayerFileName)
                     .then(() => loadCostume(costume.md5, costume, runtime, 2 /* optVersion */))
             ));
         }
@@ -536,8 +538,9 @@ const parseScratchAssets = function (object, runtime, topLevel, zip) {
             // the file name of the sound should be the soundID (provided from the project.json)
             // followed by the file ext
             const assetFileName = `${soundSource.soundID}.${ext}`;
-            soundPromises.push(runtime.wrapAssetRequest(() =>
-                deserializeSound(sound, runtime, zip, assetFileName)
+            soundPromises.push(runtime.wrapAssetRequest(
+                AssetProfilerDetails.forSound(object.objName, sound),
+                () => deserializeSound(sound, runtime, zip, assetFileName)
                     .then(() => loadSound(sound, runtime, soundBank))
             ));
         }

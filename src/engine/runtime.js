@@ -534,6 +534,20 @@ class Runtime extends EventEmitter {
          * Total number of finished or errored scratch-storage load() requests since the runtime was created or cleared.
          */
         this.finishedAssetRequests = 0;
+
+        /**
+         * True if asset load time profiling is enabled.
+         * @type {boolean}
+         */
+        this.assetProfiling = true;
+
+        /**
+         * If asset load time profiling is enabled, a promise that will resolve/reject when the previous asset has
+         * loaded successfully or failed.
+         * @type {Promise<unknown>}
+         * @private
+         */
+        this._previousAsset = Promise.resolve();
     }
 
     /**
@@ -3460,10 +3474,11 @@ class Runtime extends EventEmitter {
     /**
      * Wrap an asset loading promise with progress support.
      * @template T
+     * @param {string} details
      * @param {() => Promise<T>} callback
      * @returns {Promise<T>}
      */
-    wrapAssetRequest (callback) {
+    wrapAssetRequest (details, callback) {
         this.totalAssetRequests++;
         this.emitAssetProgress();
 
@@ -3478,6 +3493,25 @@ class Runtime extends EventEmitter {
             this.emitAssetProgress();
             throw error;
         };
+
+        if (this.assetProfiling) {
+            let startTime = 0;
+            this._previousAsset = this._previousAsset
+                .then(() => {
+                    startTime = performance.now();
+                })
+                .then(callback, callback)
+                .then(result => {
+                    const endTime = performance.now();
+                    const totalTime = endTime - startTime;
+
+                    (window.a||(window.a=[])).push(`${details.sprite} - ${details.type} - ${details.asset?.name},${totalTime}`);
+
+                    return result;
+                })
+                .then(onSuccess, onError);
+            return this._previousAsset;
+        }
 
         return callback().then(onSuccess, onError);
     }

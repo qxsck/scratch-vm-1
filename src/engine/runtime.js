@@ -1060,6 +1060,9 @@ class Runtime extends EventEmitter {
             blockIconURI: extensionInfo.blockIconURI,
             menuIconURI: extensionInfo.menuIconURI
         };
+        categoryInfo.blockIconWidth = extensionInfo.blockIconWidth;
+        categoryInfo.blockIconHeight = extensionInfo.blockIconHeight;
+
 
         if (extensionInfo.color1) {
             categoryInfo.color1 = extensionInfo.color1;
@@ -1530,7 +1533,7 @@ class Runtime extends EventEmitter {
             xml: `<label text="${xmlEscape(blockInfo.text)}"></label>`
         };
     }
-    
+
     /**
      * Convert a button for scratch-blocks. A button has no opcode but specifies a callback name in the `func` field.
      * @param {ExtensionBlockMetadata} buttonInfo - the button to convert
@@ -1587,8 +1590,8 @@ class Runtime extends EventEmitter {
             type: 'field_image',
             src: argInfo.dataURI || '',
             // TODO these probably shouldn't be hardcoded...?
-            width: 24,
-            height: 24,
+            width: categoryInfo.blockIconWidth || 40,
+            height: categoryInfo.blockIconHeight || 40
             // Whether or not the inline image should be flipped horizontally
             // in RTL languages. Defaults to false, indicating that the
             // image will not be flipped.

@@ -1591,7 +1591,7 @@ class Runtime extends EventEmitter {
             src: argInfo.dataURI || '',
             // TODO these probably shouldn't be hardcoded...?
             width: categoryInfo.blockIconWidth || 40,
-            height: categoryInfo.blockIconHeight || 40
+            height: categoryInfo.blockIconHeight || 40,
             // Whether or not the inline image should be flipped horizontally
             // in RTL languages. Defaults to false, indicating that the
             // image will not be flipped.
